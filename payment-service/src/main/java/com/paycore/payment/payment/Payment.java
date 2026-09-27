@@ -104,6 +104,9 @@ public class Payment {
 
     /** Claims a capture or void before the acquirer is called (spec §5.3). */
     public void beginTransition(PaymentStatus inFlight) {
+        if (inFlight != PaymentStatus.CAPTURING && inFlight != PaymentStatus.VOIDING) {
+            throw new IllegalArgumentException("not an in-flight status: " + inFlight);
+        }
         moveTo(inFlight);
         this.transitionStartedAt = updatedAt;
     }
@@ -121,6 +124,9 @@ public class Payment {
     }
 
     public void completeTransition(PaymentStatus done) {
+        if (done != PaymentStatus.CAPTURED && done != PaymentStatus.VOIDED) {
+            throw new IllegalArgumentException("not a completed transition: " + done);
+        }
         moveTo(done);
     }
 

@@ -19,7 +19,8 @@ class PaymentPersistenceTest extends PaymentServiceTest {
     @Test
     void aPendingPaymentRoundTripsThroughTheSchema() {
         UUID id = UUID.randomUUID();
-        repository.save(Payment.pending(id, "acme", 1999, "USD", "tok_approve", "Order 42"));
+        Payment saved = Payment.pending(id, "acme", 1999, "USD", "tok_approve", "Order 42");
+        repository.save(saved);
 
         Payment loaded = repository.findByIdAndTenant(id, "acme").orElseThrow();
 
@@ -30,6 +31,7 @@ class PaymentPersistenceTest extends PaymentServiceTest {
         assertThat(loaded.getDescription()).isEqualTo("Order 42");
         assertThat(loaded.getVersion()).isZero();
         assertThat(loaded.getUpdatedAt()).isEqualTo(loaded.getCreatedAt());
+        assertThat(loaded.getCreatedAt()).isEqualTo(saved.getCreatedAt());
     }
 
     @Test
@@ -42,13 +44,25 @@ class PaymentPersistenceTest extends PaymentServiceTest {
 
     @Test
     void theSchemaRefusesAnAmountOutsideTheRange() {
-        assertThatThrownBy(() -> insertRaw(0, "PENDING"))
+        assertThatThrownBy(() -> insertRaw(0, "USD", "PENDING"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void theSchemaRefusesAnAmountAboveTheCap() {
+        assertThatThrownBy(() -> insertRaw(1_000_000_001L, "USD", "PENDING"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void theSchemaRefusesAStatusItDoesNotKnow() {
-        assertThatThrownBy(() -> insertRaw(1999, "REFUNDED"))
+        assertThatThrownBy(() -> insertRaw(1999, "USD", "REFUNDED"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void theSchemaRefusesACurrencyItDoesNotSupport() {
+        assertThatThrownBy(() -> insertRaw(1999, "JPY", "PENDING"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
@@ -61,13 +75,22 @@ class PaymentPersistenceTest extends PaymentServiceTest {
                 .hasMessageContaining("PENDING");
     }
 
-    private void insertRaw(long amount, String status) {
+    @Test
+    void completingATransitionWithANonCompletedStatusIsRejected() {
+        Payment payment = Payment.pending(UUID.randomUUID(), "acme", 1999, "USD", "tok_approve", null);
+
+        assertThatThrownBy(() -> payment.completeTransition(PaymentStatus.AUTHORIZED))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private void insertRaw(long amount, String currency, String status) {
         jdbc.sql("""
                         INSERT INTO payments (id, tenant, amount_minor, currency, card_token, status,
                                               version, created_at, updated_at)
-                        VALUES (:id, 'acme', :amount, 'USD', 'tok_approve', :status, 0, now(), now())""")
+                        VALUES (:id, 'acme', :amount, :currency, 'tok_approve', :status, 0, now(), now())""")
                 .param("id", UUID.randomUUID())
                 .param("amount", amount)
+                .param("currency", currency)
                 .param("status", status)
                 .update();
     }
