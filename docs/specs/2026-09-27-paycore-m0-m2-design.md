@@ -155,10 +155,10 @@ Unknown JSON fields are rejected (`400`), so a misspelt field can't be silently 
 PENDING ──approved──▶ AUTHORIZED ──claim──▶ CAPTURING ──acquirer ok──▶ CAPTURED
    │                      │
    ├──declined──▶ DECLINED └──claim──▶ VOIDING ──acquirer ok──▶ VOIDED
-   └──no answer──▶ UNKNOWN
+   └──no answer──▶ UNKNOWN ──re-drive (§7.5)──▶ AUTHORIZED | DECLINED
 ```
 
-`PaymentStatus` owns the transition table and is unit-tested without Spring. Any transition not drawn above is refused.
+`PaymentStatus` owns the transition table and is unit-tested without Spring. Any transition not drawn above is refused. A re-drive that again gets no answer leaves the payment `UNKNOWN` without a transition.
 
 ### 5.3 Transaction boundaries
 
@@ -284,7 +284,7 @@ The same key with a different fingerprint → `422` with `detail: "Idempotency-K
 
 The row is inserted in the **same transaction** as the `PENDING` payment (§5.3 Tx 1), so the primary key alone prevents two payments for one key, whatever Redis says.
 
-**Redis is the fast path.** Key `paycore:idem:{tenant}:{key}`, value JSON `{state, fingerprint, owner, responseStatus?, responseBody?}`.
+**Redis is the fast path.** Key `paycore:idem:{len(tenant)}:{tenant}:{key}`, value JSON `{state, fingerprint, owner, responseStatus?, responseBody?}`. The tenant is length-prefixed so that tenant `a:b` with key `c` and tenant `a` with key `b:c` can't share a Redis key, which would let one tenant replay another's payment.
 
 - **Lock:** `SET … NX PX 30000` with `state: IN_PROGRESS` and a random `owner` token.
 - **Completed:** overwritten with `state: COMPLETED` and the response, with `EX` of 24 h.
