@@ -1,0 +1,19 @@
+server:
+  port: 8091
+
+spring:
+  application:
+    name: acquirer-simulator
+  threads:
+    virtual:
+      enabled: true
+
+simulator:
+  latency: 0ms
+  slow-response: 5s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
