@@ -51,13 +51,13 @@ public final class PaymentsAuthorization implements AuthorizationManager<Request
         if (!granted.contains("SCOPE_" + permission) || !granted.contains(permission)) {
             return new DetailedDenial(INSUFFICIENT_PERMISSION);
         }
-        if (!(current.getPrincipal() instanceof Jwt jwt) || isBlank(jwt.getClaimAsString("tenant"))) {
+        // getClaimAsString would coerce a list or a number into a tenant; only a real string
+        // claim counts, so a claim of the wrong shape is treated the same as a missing one.
+        if (!(current.getPrincipal() instanceof Jwt jwt)
+                || !(jwt.getClaims().get("tenant") instanceof String tenant)
+                || tenant.isBlank()) {
             return new DetailedDenial(NO_TENANT);
         }
         return new AuthorizationDecision(true);
-    }
-
-    private static boolean isBlank(String value) {
-        return value == null || value.isBlank();
     }
 }

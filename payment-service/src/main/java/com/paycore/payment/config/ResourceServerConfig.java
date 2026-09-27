@@ -34,15 +34,20 @@ public class ResourceServerConfig {
                                             JsonAuthenticationEntryPoint authenticationEntryPoint) throws Exception {
         http
             .authorizeHttpRequests(authorize -> authorize
-                // Boot's error page is rendered on an ERROR dispatch of the original request,
-                // which already passed this chain; refusing it would turn a 500 into a 403.
+                // Permitting ERROR dispatches keeps Boot's error rendering from being
+                // re-authorized. Not every ERROR dispatch follows a request that already
+                // passed this chain — a JWKS outage or a firewall rejection also end in one —
+                // so re-running authorization here would disguise a 500 as a 401 instead of
+                // letting an AuthCore outage surface as the 500 it actually is.
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/payments", "/payments/*")
                     .access(PaymentsAuthorization.requires("payments:read"))
                 .requestMatchers(HttpMethod.POST, "/payments", "/payments/*/capture", "/payments/*/void")
                     .access(PaymentsAuthorization.requires("payments:write"))
-                .anyRequest().denyAll())
+                // Deny by default, but say so: an unmapped route is not the caller's
+                // permissions being wrong, it is that the operation does not exist.
+                .anyRequest().access((authentication, context) -> new DetailedDenial("no such operation")))
             .oauth2ResourceServer(resourceServer -> resourceServer
                 .accessDeniedHandler(accessDeniedHandler)
                 .authenticationEntryPoint(authenticationEntryPoint)

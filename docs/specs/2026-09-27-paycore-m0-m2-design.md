@@ -441,6 +441,8 @@ The following tests are required. Each one pins a promise the design makes:
 - **Not behind GateKeeper yet.** No route and no rate limiting until M7.
 - **Offset-free, cursor-free listing.** `limit` only, newest first (keyset pagination in M7).
 - **The acquirer link is unauthenticated** by design (§6).
+- **Audience is not validated.** AuthCore sets `aud` to the client id, not the resource, so scope + permission act as the audience check, as in ledger-service. A token carrying `payments:*` that was presented to another platform service can be replayed here.
+- **Access tokens typed `at+jwt` (RFC 9068) are rejected** by Security 7's default `JwtTypeValidator`. AuthCore sets no `typ` today. If it ever adopts RFC 9068, this service needs a type validator that accepts `at+jwt`.
 
 ---
 

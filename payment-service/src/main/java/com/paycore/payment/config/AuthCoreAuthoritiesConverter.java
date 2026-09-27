@@ -27,6 +27,11 @@ public class AuthCoreAuthoritiesConverter implements Converter<Jwt, Collection<G
             authorities.add(new SimpleGrantedAuthority(role.startsWith("ROLE_") ? role : "ROLE_" + role));
         }
         for (String permission : claimAsList(jwt, "permissions")) {
+            // The client ceiling must come only from `scope`: a permission entry that merely
+            // looks like a scope or role authority must not be able to satisfy either check.
+            if (permission.startsWith("SCOPE_") || permission.startsWith("ROLE_")) {
+                continue;
+            }
             authorities.add(new SimpleGrantedAuthority(permission));
         }
         return authorities;
