@@ -2,6 +2,9 @@ package com.paycore.acquirer;
 
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -10,8 +13,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.handler;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -49,6 +54,9 @@ class CaptureAndVoidTest {
         action(id, "capture").andExpect(status().isOk());
 
         action(id, "void").andExpect(status().isConflict());
+
+        // The rejected move must not have disturbed the state it rejected.
+        action(id, "capture").andExpect(status().isOk()).andExpect(jsonPath("$.status").value("CAPTURED"));
     }
 
     @Test
@@ -57,6 +65,9 @@ class CaptureAndVoidTest {
         action(id, "void").andExpect(status().isOk());
 
         action(id, "capture").andExpect(status().isConflict());
+
+        // The rejected move must not have disturbed the state it rejected.
+        action(id, "void").andExpect(status().isOk()).andExpect(jsonPath("$.status").value("VOIDED"));
     }
 
     @Test
@@ -67,8 +78,30 @@ class CaptureAndVoidTest {
     }
 
     @Test
-    void anUnknownAuthorizationIsNotFound() throws Exception {
-        action("auth_does_not_exist", "capture").andExpect(status().isNotFound());
+    void aDeclinedAuthorizationCannotBeVoided() throws Exception {
+        String id = authorizationId(authorize("tok_decline_funds"));
+
+        action(id, "void").andExpect(status().isConflict());
+    }
+
+    /**
+     * Boot renders an unmapped route's 404 the same way as ours, so asserting the status alone
+     * can't tell the two apart. Asserting which handler served the request rules out the
+     * unmapped-route false positive.
+     */
+    @ParameterizedTest
+    @MethodSource("actionsAndHandlerMethods")
+    void anUnknownAuthorizationIsNotFound(String action, String handlerMethod) throws Exception {
+        action("auth_does_not_exist", action)
+                .andExpect(status().isNotFound())
+                .andExpect(handler().handlerType(AuthorizationController.class))
+                .andExpect(handler().methodName(handlerMethod));
+    }
+
+    private static Stream<Arguments> actionsAndHandlerMethods() {
+        return Stream.of(
+                Arguments.of("capture", "capture"),
+                Arguments.of("void", "voidAuthorization"));
     }
 
     private String approved() throws Exception {

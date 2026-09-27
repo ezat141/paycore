@@ -43,12 +43,14 @@ class AuthorizationController {
     }
 
     @PostMapping("/{authorizationId}/capture")
-    ActionResponse capture(@PathVariable String authorizationId) {
+    ActionResponse capture(@PathVariable String authorizationId) throws InterruptedException {
+        Thread.sleep(properties.latency());
         return ActionResponse.from(book.capture(authorizationId));
     }
 
     @PostMapping("/{authorizationId}/void")
-    ActionResponse voidAuthorization(@PathVariable String authorizationId) {
+    ActionResponse voidAuthorization(@PathVariable String authorizationId) throws InterruptedException {
+        Thread.sleep(properties.latency());
         return ActionResponse.from(book.voidAuthorization(authorizationId));
     }
 }

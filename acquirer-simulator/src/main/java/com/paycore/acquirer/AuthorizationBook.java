@@ -11,7 +11,9 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * In-memory authorizations, keyed by the merchant's reference. {@code computeIfAbsent} makes
  * "have I seen this reference?" and "record it" one atomic step, so two concurrent requests
- * with the same reference cannot both create an authorization.
+ * with the same reference cannot both create an authorization. Transitions use {@code compute}
+ * on that same key, so a move is atomic with respect to other moves and to the authorization
+ * that created the entry.
  */
 @Component
 class AuthorizationBook {
@@ -60,6 +62,12 @@ class AuthorizationBook {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "no such authorization");
         }
         return byReference.compute(reference, (ignored, current) -> {
+            // referenceById is written inside authorize()'s computeIfAbsent, so it can briefly be
+            // ahead of byReference. compute blocks until that entry is installed, so this is
+            // defensive against future reordering.
+            if (current == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "no such authorization");
+            }
             if (current.status() == target) {
                 return current;
             }
