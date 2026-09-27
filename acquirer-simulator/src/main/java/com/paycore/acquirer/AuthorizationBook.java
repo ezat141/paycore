@@ -42,6 +42,35 @@ class AuthorizationBook {
         return byReference.containsKey(reference);
     }
 
+    Authorization capture(String authorizationId) {
+        return move(authorizationId, AuthorizationStatus.CAPTURED);
+    }
+
+    Authorization voidAuthorization(String authorizationId) {
+        return move(authorizationId, AuthorizationStatus.VOIDED);
+    }
+
+    /**
+     * Repeating a completed move returns it unchanged, which is what makes PayCore's re-drive
+     * of a stuck capture safe. Any other move out of a non-approved state is refused.
+     */
+    private Authorization move(String authorizationId, AuthorizationStatus target) {
+        String reference = referenceById.get(authorizationId);
+        if (reference == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "no such authorization");
+        }
+        return byReference.compute(reference, (ignored, current) -> {
+            if (current.status() == target) {
+                return current;
+            }
+            if (current.status() != AuthorizationStatus.APPROVED) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "cannot move " + current.status() + " to " + target);
+            }
+            return current.withStatus(target);
+        });
+    }
+
     private static Authorization decide(AuthorizationRequest request) {
         String id = "auth_" + UUID.randomUUID();
         if ("tok_decline_funds".equals(request.cardToken())) {

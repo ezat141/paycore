@@ -1,6 +1,7 @@
 package com.paycore.acquirer;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -39,5 +40,15 @@ class AuthorizationController {
             Thread.sleep(properties.slowResponse());
         }
         return AuthorizationResponse.from(recorded.authorization());
+    }
+
+    @PostMapping("/{authorizationId}/capture")
+    ActionResponse capture(@PathVariable String authorizationId) {
+        return ActionResponse.from(book.capture(authorizationId));
+    }
+
+    @PostMapping("/{authorizationId}/void")
+    ActionResponse voidAuthorization(@PathVariable String authorizationId) {
+        return ActionResponse.from(book.voidAuthorization(authorizationId));
     }
 }
