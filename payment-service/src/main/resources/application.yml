@@ -1,0 +1,23 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: payment-service
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: jdbc:postgresql://localhost:5433/paycore_payments
+    username: paycore
+    password: paycore
+  jpa:
+    open-in-view: false        # transactions are explicit (PaymentWrites); never one per request
+    hibernate:
+      ddl-auto: validate       # Flyway owns the schema; Hibernate only checks it
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
