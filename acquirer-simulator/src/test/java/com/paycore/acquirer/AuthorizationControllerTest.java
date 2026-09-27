@@ -130,12 +130,14 @@ class AuthorizationControllerTest {
     }
 
     /**
-     * The charge happens even though the response is late, and a retry sent <em>while the first
-     * call is still stalled</em> must still find it immediately — that's what lets PayCore
-     * recover a timed-out payment without charging twice. Running the two calls one after
-     * another (as opposed to overlapping them) wouldn't tell a real in-flight retry apart from
-     * one that simply waited for the first call to finish, so the first call runs on its own
-     * thread and the retry is sent before it returns.
+     * The authorization is recorded <em>before</em> the stall begins — not somewhere inside it —
+     * and a retry sent <em>while the first call is still stalled</em> returns at once with that
+     * stored authorization. That's what lets PayCore recover a timed-out payment without
+     * charging twice. Running the two calls one after another (as opposed to overlapping them)
+     * wouldn't tell a real in-flight retry apart from one that simply waited for the first call
+     * to finish, so the first call runs on its own thread, the test waits only briefly for the
+     * record to appear, and then asserts the first call is still in flight when the retry
+     * returns.
      */
     @Test
     void aTimeoutTokenRecordsTheApprovalBeforeStalling() throws Exception {
@@ -156,6 +158,8 @@ class AuthorizationControllerTest {
                     .andExpect(jsonPath("$.status").value("APPROVED")));
             long secondMillis = (System.nanoTime() - retryStarted) / 1_000_000;
 
+            assertThat(firstCall.isDone()).as("retry overlapped the stall").isFalse();
+
             String first = firstCall.get(5, TimeUnit.SECONDS);
             long firstMillis = (System.nanoTime() - started) / 1_000_000;
 
@@ -167,11 +171,18 @@ class AuthorizationControllerTest {
         }
     }
 
+    /**
+     * A short deadline, well under {@code slow-response}, is the point: the record must appear
+     * before the stall starts. A stall hidden inside {@code computeIfAbsent} (so
+     * {@code isRecorded} can't see the entry until the lambda finishes) would blow straight past
+     * this deadline instead of quietly waiting it out.
+     */
     private void awaitRecorded(String reference) throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500);
         while (!book.isRecorded(reference)) {
             if (System.nanoTime() > deadline) {
-                throw new AssertionError("authorization for reference " + reference + " was never recorded");
+                throw new AssertionError(
+                        "authorization for reference " + reference + " was never recorded before the stall");
             }
             Thread.sleep(5);
         }
