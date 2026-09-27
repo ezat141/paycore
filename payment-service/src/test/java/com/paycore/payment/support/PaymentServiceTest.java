@@ -1,5 +1,6 @@
 package com.paycore.payment.support;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -22,4 +23,9 @@ public abstract class PaymentServiceTest {
 
     @Autowired
     protected JdbcClient jdbc;
+
+    @BeforeEach
+    void resetDatabase() {
+        jdbc.sql("TRUNCATE payments").update();
+    }
 }
