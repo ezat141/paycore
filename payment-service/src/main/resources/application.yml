@@ -11,6 +11,15 @@ spring:
     url: jdbc:postgresql://localhost:5433/paycore_payments
     username: paycore
     password: paycore
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Keys come from jwk-set-uri, fetched lazily on the first token — so this service
+          # starts with AuthCore down. issuer-uri only pins `iss`; with jwk-set-uri also set,
+          # Boot makes no discovery call.
+          jwk-set-uri: http://localhost:8080/oauth2/jwks
+          issuer-uri: http://localhost:8080
   jpa:
     open-in-view: false        # transactions are explicit (PaymentWrites); never one per request
     hibernate:
