@@ -443,6 +443,7 @@ The following tests are required. Each one pins a promise the design makes:
 - **The acquirer link is unauthenticated** by design (§6).
 - **Audience is not validated.** AuthCore sets `aud` to the client id, not the resource, so scope + permission act as the audience check, as in ledger-service. A token carrying `payments:*` that was presented to another platform service can be replayed here.
 - **Access tokens typed `at+jwt` (RFC 9068) are rejected** by Security 7's default `JwtTypeValidator`. AuthCore sets no `typ` today. If it ever adopts RFC 9068, this service needs a type validator that accepts `at+jwt`.
+- **An unknown `kid` re-fetches AuthCore's JWKS on every request.** Spring's default JWK source does not rate-limit refreshes, so a forged token with a made-up `kid` costs one call to AuthCore per request. ledger-service has the same default. Rate-limiting JWKS refresh belongs with GateKeeper's edge protection (M7).
 
 ---
 

@@ -172,4 +172,13 @@ class SecurityBoundaryTest extends PaymentServiceTest {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.detail").value("token carries no tenant"));
     }
+
+    /** A tenant claim present but blank is not a tenant either: a string, but not a real one. */
+    @Test
+    void aBlankTenantClaimIsRefusedAsNoTenant() throws Exception {
+        mockMvc.perform(get("/payments")
+                        .with(Tokens.token(" ", List.of("payments:read"), List.of("payments:read"))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.detail").value("token carries no tenant"));
+    }
 }

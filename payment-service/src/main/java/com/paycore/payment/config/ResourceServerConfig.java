@@ -52,6 +52,7 @@ public class ResourceServerConfig {
                 .accessDeniedHandler(accessDeniedHandler)
                 .authenticationEntryPoint(authenticationEntryPoint)
                 .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter())))
+            // Deliberately duplicates the handlers set on oauth2ResourceServer above, so refusals from both AuthorizationFilter and ExceptionTranslationFilter keep the platform shape even if the resource-server wiring changes.
             .exceptionHandling(handling -> handling
                 .accessDeniedHandler(accessDeniedHandler)
                 .authenticationEntryPoint(authenticationEntryPoint))
