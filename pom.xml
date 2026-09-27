@@ -22,5 +22,6 @@
 
     <modules>
         <module>acquirer-simulator</module>
+        <module>payment-service</module>
     </modules>
 </project>
