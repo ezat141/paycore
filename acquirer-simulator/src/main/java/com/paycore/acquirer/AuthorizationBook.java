@@ -37,6 +37,11 @@ class AuthorizationBook {
         return new Recorded(authorization, created[0]);
     }
 
+    /** Whether {@code reference} has been recorded yet — a read-only check, no side effect. */
+    boolean isRecorded(String reference) {
+        return byReference.containsKey(reference);
+    }
+
     private static Authorization decide(AuthorizationRequest request) {
         String id = "auth_" + UUID.randomUUID();
         if ("tok_decline_funds".equals(request.cardToken())) {

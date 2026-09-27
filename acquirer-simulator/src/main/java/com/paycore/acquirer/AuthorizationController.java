@@ -26,6 +26,9 @@ class AuthorizationController {
 
     @PostMapping
     AuthorizationResponse authorize(@RequestBody AuthorizationRequest request) throws InterruptedException {
+        if (request.reference() == null || request.reference().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "reference is required");
+        }
         Thread.sleep(properties.latency());
         if ("tok_error".equals(request.cardToken())) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "simulated acquirer failure");
