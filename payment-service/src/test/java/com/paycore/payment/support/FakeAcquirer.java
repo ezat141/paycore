@@ -15,6 +15,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 /**
  * The parts of spec §6's acquirer contract that payment-service's tests exercise, in-process.
@@ -60,6 +61,7 @@ public final class FakeAcquirer implements AutoCloseable {
     private final AtomicInteger failingActions = new AtomicInteger();
     private volatile Duration authorizeDelay = Duration.ZERO;
     private volatile Duration slowResponse = DEFAULT_SLOW_RESPONSE;
+    private volatile Consumer<String> onAuthorize = reference -> { };
 
     private FakeAcquirer(HttpServer server) {
         this.server = server;
@@ -118,6 +120,16 @@ public final class FakeAcquirer implements AutoCloseable {
     }
 
     /**
+     * Runs synchronously inside the authorize handler, once the reference is known but before any
+     * response is sent — a hook for a test to observe state (typically the database, through a
+     * separate pooled connection) at the instant the acquirer is called, such as proving a row was
+     * already committed (spec §5.3).
+     */
+    public void onAuthorize(Consumer<String> hook) {
+        this.onAuthorize = hook;
+    }
+
+    /**
      * Does not stop a handler that is already sleeping in {@link #authorize} or {@link #act}:
      * a test that leaves a delayed request in flight must let it finish, or use a fresh reference,
      * before the next test resets state under it.
@@ -131,6 +143,7 @@ public final class FakeAcquirer implements AutoCloseable {
         failingActions.set(0);
         authorizeDelay = Duration.ZERO;
         slowResponse = DEFAULT_SLOW_RESPONSE;
+        onAuthorize = reference -> { };
     }
 
     @Override
@@ -164,6 +177,7 @@ public final class FakeAcquirer implements AutoCloseable {
         String reference = (String) request.get("reference");
         String cardToken = (String) request.get("cardToken");
         authorizeCallsByReference.computeIfAbsent(reference, r -> new AtomicInteger()).incrementAndGet();
+        onAuthorize.accept(reference);
         Thread.sleep(authorizeDelay);
 
         if ("tok_error".equals(cardToken)) {
