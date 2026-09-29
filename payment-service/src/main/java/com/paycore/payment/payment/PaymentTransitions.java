@@ -56,8 +56,10 @@ public class PaymentTransitions {
                     ? acquirer.capture(authorizationId)
                     : acquirer.voidAuthorization(authorizationId);
         } catch (HttpClientErrorException refused) {
-            // Left in CAPTURING/VOIDING, never reverted: the acquirer may have done it, and only
-            // reconciliation (M5) can resolve it against the acquirer's own record.
+            // The acquirer answered, and said no: it does not know the authorization, or holds it
+            // in a state that forbids this move. Our record and theirs disagree, so neither
+            // completing nor reverting is safe; the payment stays in flight until reconciliation
+            // (M5) settles it against the acquirer's own record.
             log.error("acquirer refused {} of payment {}: {}", action.verb, claimed.getId(), refused.getStatusCode());
             throw ApiException.acquirerRefused(action.verb);
         }
