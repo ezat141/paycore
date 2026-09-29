@@ -2,6 +2,7 @@ package com.paycore.payment.payment;
 
 import com.paycore.payment.error.ApiException;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.Limit;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -13,8 +14,10 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -48,6 +51,17 @@ public class PaymentController {
         return payments.findByIdAndTenant(id, tenantOf(jwt))
                 .map(PaymentResponse::from)
                 .orElseThrow(ApiException::notFound);
+    }
+
+    @GetMapping
+    public List<PaymentResponse> list(@AuthenticationPrincipal Jwt jwt,
+                                      @RequestParam(defaultValue = "20") int limit) {
+        if (limit < 1 || limit > 100) {
+            throw ApiException.badRequest("limit must be between 1 and 100");
+        }
+        return payments.findByTenantOrderByCreatedAtDescIdDesc(tenantOf(jwt), Limit.of(limit)).stream()
+                .map(PaymentResponse::from)
+                .toList();
     }
 
     private static void requireWellFormed(String idempotencyKey) {
