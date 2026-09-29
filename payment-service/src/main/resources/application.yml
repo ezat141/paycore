@@ -42,3 +42,5 @@ paycore:
     base-url: http://localhost:8091
     connect-timeout: 1s
     read-timeout: 2s
+  payments:
+    transition-stale-after: 30s

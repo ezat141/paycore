@@ -1,5 +1,6 @@
 package com.paycore.payment.support;
 
+import com.paycore.payment.payment.PaymentRepository;
 import com.paycore.payment.payment.PaymentStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -9,6 +10,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
@@ -47,6 +49,14 @@ public abstract class PaymentServiceTest {
 
     @Autowired
     protected JdbcClient jdbc;
+
+    /**
+     * A spy on the shared bean, not a separate mock context: every subclass reuses one Spring
+     * context. {@code @MockitoSpyBean} defaults to {@code MockReset.AFTER}, so Mockito resets its
+     * stubbing (but not the underlying repository) after every test method.
+     */
+    @MockitoSpyBean
+    protected PaymentRepository paymentRepository;
 
     @BeforeEach
     void resetState() {
