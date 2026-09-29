@@ -42,7 +42,9 @@ public final class ApiException extends RuntimeException {
     }
 
     public static ApiException keyReused() {
-        // valueOf, not a constant: Framework 7 renamed 422's constant, and the number is the contract.
+        // valueOf, not a constant: HttpStatus.UNPROCESSABLE_ENTITY is deprecated in Framework 7 in
+        // favour of UNPROCESSABLE_CONTENT (same 422, not a rename); the number is the contract,
+        // not either constant's name.
         return new ApiException(HttpStatus.valueOf(422),
                 "Idempotency-Key was already used with a different request", Map.of(), false);
     }

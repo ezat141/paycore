@@ -25,5 +25,6 @@ public record PaymentRequest(
         String cardToken,
 
         @Size(max = 255, message = "must be at most 255 characters")
+        @Pattern(regexp = "\\P{Cc}*", message = "must not contain control characters")
         String description) {
 }

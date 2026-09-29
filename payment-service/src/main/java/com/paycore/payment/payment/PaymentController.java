@@ -3,6 +3,7 @@ package com.paycore.payment.payment;
 import com.paycore.payment.error.ApiException;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -32,7 +33,7 @@ public class PaymentController {
         this.payments = payments;
     }
 
-    @PostMapping
+    @PostMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PaymentResponse> create(@AuthenticationPrincipal Jwt jwt,
                                                   @RequestHeader("Idempotency-Key") String idempotencyKey,
                                                   @Valid @RequestBody PaymentRequest request) {
@@ -40,7 +41,7 @@ public class PaymentController {
         return ResponseEntity.status(HttpStatus.CREATED).body(creation.create(tenantOf(jwt), request));
     }
 
-    @GetMapping("/{id}")
+    @GetMapping(path = "/{id}", produces = MediaType.APPLICATION_JSON_VALUE)
     public PaymentResponse get(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
         return payments.findByIdAndTenant(id, tenantOf(jwt))
                 .map(PaymentResponse::from)

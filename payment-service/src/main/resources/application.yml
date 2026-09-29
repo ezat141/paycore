@@ -28,6 +28,8 @@ spring:
     deserialization:
       fail-on-unknown-properties: true   # a misspelt field is an error, not silently ignored
       accept-float-as-int: false         # 19.99 must be refused, never truncated to 19
+    mapper:
+      allow-coercion-of-scalars: false   # "1999" for amount must be refused, not coerced to a number
 
 management:
   endpoints:

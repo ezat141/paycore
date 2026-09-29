@@ -59,6 +59,35 @@ class PaymentValidationTest extends PaymentServiceTest {
         assertThat(acquirer.totalAuthorizeCalls()).isZero();
     }
 
+    /** §5.1: amount is an integer. A quoted number is a string, not coerced into one. */
+    @Test
+    void aStringAmountIsRefusedNotCoerced() throws Exception {
+        create(Tokens.writer("acme"), "order-1", """
+                {"amount":"1999","currency":"USD","cardToken":"tok_approve"}""")
+                .andExpect(status().isBadRequest());
+
+        assertThat(acquirer.totalAuthorizeCalls()).isZero();
+    }
+
+    /** A NUL is a control character Postgres refuses outright; it must never reach the database. */
+    @Test
+    void aDescriptionWithANulCharacterIsRefused() throws Exception {
+        create(Tokens.writer("acme"), "order-1", """
+                {"amount":1999,"currency":"USD","cardToken":"tok_approve","description":"a\\u0000b"}""")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(containsString("description:")));
+
+        assertThat(acquirer.totalAuthorizeCalls()).isZero();
+    }
+
+    @Test
+    void aDescriptionWithATabIsRefused() throws Exception {
+        create(Tokens.writer("acme"), "order-1", """
+                {"amount":1999,"currency":"USD","cardToken":"tok_approve","description":"a\\tb"}""")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(containsString("description:")));
+    }
+
     @Test
     void anUnknownFieldIsRefused() throws Exception {
         create(Tokens.writer("acme"), "order-1", """
@@ -80,6 +109,16 @@ class PaymentValidationTest extends PaymentServiceTest {
                         .contentType(MediaType.APPLICATION_JSON).content(body(1999, "tok_approve")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value("Idempotency-Key header is required"));
+
+        assertThat(acquirer.totalAuthorizeCalls()).isZero();
+    }
+
+    @Test
+    void anEmptyIdempotencyKeyIsRefused() throws Exception {
+        create(Tokens.writer("acme"), "", body(1999, "tok_approve"))
+                .andExpect(status().isBadRequest());
+
+        assertThat(acquirer.totalAuthorizeCalls()).isZero();
     }
 
     @Test
@@ -87,11 +126,15 @@ class PaymentValidationTest extends PaymentServiceTest {
         create(Tokens.writer("acme"), "order 1", body(1999, "tok_approve"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value("Idempotency-Key must be 1-255 printable ASCII characters, without spaces"));
+
+        assertThat(acquirer.totalAuthorizeCalls()).isZero();
     }
 
     @Test
     void anOverlongIdempotencyKeyIsRefused() throws Exception {
         create(Tokens.writer("acme"), "k".repeat(256), body(1999, "tok_approve"))
                 .andExpect(status().isBadRequest());
+
+        assertThat(acquirer.totalAuthorizeCalls()).isZero();
     }
 }

@@ -3,9 +3,11 @@ package com.paycore.payment.payment;
 import com.paycore.payment.support.PaymentServiceTest;
 import com.paycore.payment.support.Tokens;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.test.web.servlet.ResultActions;
 
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.paycore.payment.support.Requests.body;
 import static com.paycore.payment.support.Requests.read;
@@ -29,8 +31,10 @@ class PaymentCreationTest extends PaymentServiceTest {
                 .andExpect(jsonPath("$.description").value("Order 42"))
                 .andExpect(jsonPath("$.declineCode").value(nullValue()))
                 .andExpect(jsonPath("$.createdAt").isNotEmpty())
+                .andExpect(jsonPath("$.updatedAt").isNotEmpty())
                 .andExpect(jsonPath("$.cardToken").doesNotExist())
-                .andExpect(jsonPath("$.tenant").doesNotExist());
+                .andExpect(jsonPath("$.tenant").doesNotExist())
+                .andExpect(jsonPath("$.acquirerAuthorizationId").doesNotExist());
     }
 
     /** A decline is a definite answer about a payment that exists: 201, not an HTTP failure. */
@@ -59,6 +63,33 @@ class PaymentCreationTest extends PaymentServiceTest {
                 .andExpect(jsonPath("$.paymentId").isNotEmpty());
 
         assertThat(statusOf(read(result, "$.paymentId"))).isEqualTo("UNKNOWN");
+    }
+
+    /**
+     * Spec §5.3: no transaction may span the acquirer call. The hook runs inside the acquirer's
+     * own handler, on a different thread, and reads through {@code jdbc}'s own pooled connection —
+     * so it only ever sees what has actually been committed, never a transaction still open on the
+     * request thread. If a transaction were held open, the row would not be visible yet at all;
+     * that is caught explicitly, rather than left to surface as some other exception, so this test
+     * fails on the assertion it is about, not on an incidental side effect of the row being absent.
+     */
+    @Test
+    void thePendingRowIsCommittedBeforeTheAcquirerIsCalled() throws Exception {
+        AtomicReference<String> statusDuringAuthorize = new AtomicReference<>("(query never ran)");
+        acquirer.onAuthorize(reference -> {
+            try {
+                statusDuringAuthorize.set(jdbc.sql("SELECT status FROM payments WHERE id = ?::uuid")
+                        .param(reference)
+                        .query(String.class)
+                        .single());
+            } catch (EmptyResultDataAccessException rowNotCommittedYet) {
+                statusDuringAuthorize.set("(no such row yet)");
+            }
+        });
+
+        create(Tokens.writer("acme"), "order-1", body(1999, "tok_approve"));
+
+        assertThat(statusDuringAuthorize.get()).isEqualTo("PENDING");
     }
 
     @Test
