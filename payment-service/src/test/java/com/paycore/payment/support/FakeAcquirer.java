@@ -17,13 +17,15 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * The acquirer contract of spec §6, in-process. Same card-token behaviours as the real
- * simulator — {@code tok_timeout} records the approval <em>before</em> stalling — plus the
- * counters and failure switches a test needs.
+ * The parts of spec §6's acquirer contract that payment-service's tests exercise, in-process.
+ * Same card-token behaviours as the real simulator — {@code tok_timeout} records the approval
+ * <em>before</em> stalling — plus the counters and failure switches a test needs. It does not
+ * model the simulator's 409 on a mismatched reference, its capture/void latency, or its 400 on a
+ * blank reference.
  */
 public final class FakeAcquirer implements AutoCloseable {
 
-    private static final Duration DEFAULT_SLOW_RESPONSE = Duration.ofSeconds(2);
+    private static final Duration DEFAULT_SLOW_RESPONSE = Duration.ofSeconds(3);
 
     private static final class Auth {
         final String id;
@@ -115,6 +117,11 @@ public final class FakeAcquirer implements AutoCloseable {
         failingActions.set(count);
     }
 
+    /**
+     * Does not stop a handler that is already sleeping in {@link #authorize} or {@link #act}:
+     * a test that leaves a delayed request in flight must let it finish, or use a fresh reference,
+     * before the next test resets state under it.
+     */
     public void reset() {
         byReference.clear();
         byId.clear();

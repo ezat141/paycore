@@ -5,9 +5,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.HttpServerErrorException;
-import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
 import java.net.http.HttpClient;
 import java.util.UUID;
@@ -16,8 +16,12 @@ import java.util.UUID;
  * The only code that talks to the acquirer. No retries, circuit breaker or bulkhead yet (M5):
  * one attempt, bounded by a connect and a read timeout.
  *
- * <p>Timeouts, refused connections and 5xx become {@code NoAnswer}. A 4xx is left to throw:
- * the state machine should make one impossible, so seeing one is a bug worth a 500.
+ * <p>Any failure to obtain a definite, well-formed answer becomes {@code NoAnswer}: a timeout at
+ * any point in the exchange (including one that lands after the headers arrive, since the read
+ * timeout is a deadline on the whole exchange), a refused connection, a 5xx, or a body we cannot
+ * read or do not recognise (truncated or malformed JSON, a missing or unrecognised status). A 4xx
+ * is left to throw: the state machine should make one impossible, so seeing one is a bug worth a
+ * 500.
  */
 @Component
 public class AcquirerClient {
@@ -58,14 +62,23 @@ public class AcquirerClient {
                     .body(new AuthorizationCall(reference.toString(), amount, currency, cardToken))
                     .retrieve()
                     .body(AuthorizationReply.class);
-        } catch (ResourceAccessException | HttpServerErrorException noAnswer) {
+        } catch (HttpClientErrorException bug) {
+            throw bug;   // a 4xx: our state machine should make it impossible, so it is a bug worth a 500
+        } catch (RestClientException noAnswer) {
             log.warn("acquirer gave no answer for payment {}: {}", reference, noAnswer.getMessage());
+            return new AuthorizeOutcome.NoAnswer();
+        }
+        if (reply == null || reply.status() == null) {
+            log.warn("acquirer returned an unreadable reply for payment {}", reference);
             return new AuthorizeOutcome.NoAnswer();
         }
         return switch (reply.status()) {
             case "APPROVED" -> new AuthorizeOutcome.Approved(reply.authorizationId());
             case "DECLINED" -> new AuthorizeOutcome.Declined(reply.authorizationId(), reply.declineCode());
-            default -> throw new IllegalStateException("acquirer returned an unknown status: " + reply.status());
+            default -> {
+                log.warn("acquirer returned an unrecognised status {} for payment {}", reply.status(), reference);
+                yield new AuthorizeOutcome.NoAnswer();
+            }
         };
     }
 
@@ -84,7 +97,9 @@ public class AcquirerClient {
                     .retrieve()
                     .body(ActionReply.class);
             return new ActionOutcome.Completed();
-        } catch (ResourceAccessException | HttpServerErrorException noAnswer) {
+        } catch (HttpClientErrorException bug) {
+            throw bug;   // a 4xx: our state machine should make it impossible, so it is a bug worth a 500
+        } catch (RestClientException noAnswer) {
             log.warn("acquirer gave no answer to {} of {}: {}", action, authorizationId, noAnswer.getMessage());
             return new ActionOutcome.NoAnswer();
         }
