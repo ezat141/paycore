@@ -83,8 +83,9 @@ public class PaymentCreation {
             outcome = acquirer.authorize(payment.getId(), payment.getAmountMinor(),
                     payment.getCurrency(), payment.getCardToken());
         } catch (HttpClientErrorException refused) {
-            // The acquirer answered, and said no: our record and theirs disagree. The payment stays
-            // PENDING, not UNKNOWN, because a retry will not resolve it; reconciliation (M5) must.
+            // The acquirer answered, and said no: our record and theirs disagree. The payment's
+            // status is left as it was (PENDING, or UNKNOWN on a re-drive) and is never moved to
+            // UNKNOWN for this, because a retry will not resolve it; reconciliation (M5) must.
             // The lease is released so a retry hears this same 502, not a false "in progress".
             log.error("acquirer refused authorization of payment {}: {}", payment.getId(), refused.getStatusCode());
             releaseQuietly(tenant, idempotencyKey);
@@ -95,7 +96,7 @@ public class PaymentCreation {
             settled = writes.recordAuthorizeOutcome(tenant, idempotencyKey, payment.getId(), outcome);
         } catch (RuntimeException e) {
             // The acquirer may have approved, and nothing recorded it: to the client this is no
-            // answer, and it must learn its payment id. The payment stays PENDING and the key
+            // answer, and it must learn its payment id. The payment keeps its status and the key
             // IN_PROGRESS, so a retry with the same key re-drives it under the same reference.
             log.error("could not record the acquirer's answer for payment {}", payment.getId(), e);
             releaseQuietly(tenant, idempotencyKey);

@@ -63,7 +63,7 @@ public final class ApiException extends RuntimeException {
                 "acquirer refused the " + verb + "; the payment needs reconciliation", Map.of(), false);
     }
 
-    /** The acquirer refused an authorization with a 4xx. The payment is left PENDING. */
+    /** The acquirer refused an authorization with a 4xx. The payment's status is left unchanged. */
     public static ApiException acquirerRefused(String verb, UUID paymentId) {
         return new ApiException(HttpStatus.BAD_GATEWAY,
                 "acquirer refused the " + verb + "; the payment needs reconciliation",
