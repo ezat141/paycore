@@ -330,7 +330,8 @@ A retry with the same key and fingerprint **claims** the row:
 
 ```sql
 UPDATE idempotency_keys SET locked_until = now() + :ttl
-WHERE tenant = :tenant AND idempotency_key = :key AND locked_until < now()
+WHERE tenant = :tenant AND idempotency_key = :key
+  AND state = 'IN_PROGRESS' AND locked_until <= now()
 ```
 
 The claim succeeds only if exactly one row is updated. Exactly one of any number of concurrent retries wins; the others get `409`.
@@ -387,7 +388,7 @@ Every refusal and failure is rendered in the platform shape `{error, status, pat
 | `404` | no such payment **for this tenant** |
 | `409` | invalid transition (`detail` names the current status); lost optimistic-lock race; idempotency key or transition in progress (`Retry-After: 1`) |
 | `422` | idempotency key reused with a different request |
-| `502` | acquirer gave no definite answer (with `paymentId` on authorize, §5.4), or refused a capture or void (`"acquirer refused the capture; the payment needs reconciliation"`) |
+| `502` | acquirer gave no definite answer (with `paymentId` on authorize, §5.4), or refused a capture or void (`"acquirer refused the capture; the payment needs reconciliation"`), or refused the authorization (`"acquirer refused the authorization; the payment needs reconciliation"`, with `paymentId`) |
 
 ---
 
@@ -436,6 +437,8 @@ The following tests are required. Each one pins a promise the design makes:
 - **`UNKNOWN` payments resolve only when the client retries.** A client that never retries leaves the payment `UNKNOWN`. M5 adds reconciliation against the acquirer.
 - **No resilience around the acquirer** beyond timeouts: no retry, circuit breaker or bulkhead (M5).
 - **A capture or void the acquirer refuses (4xx) leaves the payment `CAPTURING` or `VOIDING`.** A retry within the 30 s window gets `409` "capture in progress" (or "void in progress"); every stale retry gets `502` "needs reconciliation" again, until M5's reconciliation resolves it against the acquirer; a restarted in-memory simulator is the realistic way to hit this locally.
+- **An authorization the acquirer refuses (4xx) leaves the payment's status unchanged**: `PENDING` on a first attempt, `UNKNOWN` if it is a re-drive of a payment that earlier got no answer. It is never moved to `UNKNOWN` for the refusal, which promises that a retry resolves it: here none will. The response is `502` "needs reconciliation" with `paymentId`, and the key's lease is released, so every retry with the same key re-drives and gets that same `502`, until M5's reconciliation resolves it against the acquirer.
+- **The Postgres lease has no owner fence.** A request that stalls past its lease (30 s, far above the acquirer's timeouts) can release or complete a key a later request has since claimed. The cost is at most extra acquirer calls and a `502`, never a double charge: every attempt uses the same payment id as the acquirer's `reference`, and the acquirer deduplicates on it.
 - **Idempotency rows are never purged.** Redis entries expire after 24 h, but the Postgres rows remain and keep replaying.
 - **A replay is a snapshot** (§7.6), not the payment's current state.
 - **Full capture only.** No partial captures, refunds or multi-capture.

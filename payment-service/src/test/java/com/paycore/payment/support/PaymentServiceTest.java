@@ -60,7 +60,7 @@ public abstract class PaymentServiceTest {
 
     @BeforeEach
     void resetState() {
-        jdbc.sql("TRUNCATE payments").update();
+        jdbc.sql("TRUNCATE idempotency_keys, payments").update();
         acquirer.reset();
     }
 
@@ -94,6 +94,20 @@ public abstract class PaymentServiceTest {
 
     protected UUID seedPayment(String tenant, PaymentStatus status, Instant createdAt) {
         return seedPayment(tenant, status, createdAt, null, null);
+    }
+
+    /** An IN_PROGRESS key whose lease ends at {@code lockedUntil} — live if in the future. */
+    protected void seedKey(String tenant, String key, String fingerprint, UUID paymentId, Instant lockedUntil) {
+        jdbc.sql("""
+                        INSERT INTO idempotency_keys (tenant, idempotency_key, fingerprint, payment_id,
+                                                      state, locked_until)
+                        VALUES (:tenant, :key, :fingerprint, :paymentId, 'IN_PROGRESS', :lockedUntil)""")
+                .param("tenant", tenant)
+                .param("key", key)
+                .param("fingerprint", fingerprint)
+                .param("paymentId", paymentId)
+                .param("lockedUntil", utc(lockedUntil), Types.TIMESTAMP_WITH_TIMEZONE)
+                .update();
     }
 
     protected static OffsetDateTime utc(Instant instant) {

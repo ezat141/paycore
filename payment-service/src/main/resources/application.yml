@@ -44,3 +44,5 @@ paycore:
     read-timeout: 2s
   payments:
     transition-stale-after: 30s
+  idempotency:
+    lock-ttl: 30s      # the lease on a key while a request runs; far above the acquirer read timeout
