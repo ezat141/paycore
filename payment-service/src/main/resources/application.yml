@@ -24,6 +24,10 @@ spring:
     open-in-view: false        # transactions are explicit (PaymentWrites); never one per request
     hibernate:
       ddl-auto: validate       # Flyway owns the schema; Hibernate only checks it
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true   # a misspelt field is an error, not silently ignored
+      accept-float-as-int: false         # 19.99 must be refused, never truncated to 19
 
 management:
   endpoints:

@@ -33,4 +33,10 @@ final class ErrorBody {
         }
         return body;
     }
+
+    static Map<String, Object> of(HttpStatus status, String path, String detail, Map<String, Object> extras) {
+        Map<String, Object> body = of(status, path, detail);
+        body.putAll(extras);
+        return body;
+    }
 }
