@@ -3,7 +3,6 @@ package com.paycore.payment.payment;
 import com.paycore.payment.error.ApiException;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Limit;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -45,7 +44,12 @@ public class PaymentController {
                                                   @RequestHeader("Idempotency-Key") String idempotencyKey,
                                                   @Valid @RequestBody PaymentRequest request) {
         requireWellFormed(idempotencyKey);
-        return ResponseEntity.status(HttpStatus.CREATED).body(creation.create(tenantOf(jwt), request));
+        CreateResult result = creation.create(tenantOf(jwt), idempotencyKey, request);
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(result.status());
+        if (result.replayed()) {
+            response.header("Idempotent-Replayed", "true");
+        }
+        return response.body(result.body());
     }
 
     @GetMapping("/{id}")
