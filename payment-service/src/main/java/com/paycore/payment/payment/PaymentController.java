@@ -19,7 +19,9 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 @RestController
-@RequestMapping("/payments")
+// produces at class level so every mapping, including ones added later, refuses a non-JSON
+// Accept with 406 before its handler runs, and so before any acquirer call.
+@RequestMapping(path = "/payments", produces = MediaType.APPLICATION_JSON_VALUE)
 public class PaymentController {
 
     /** 1–255 printable ASCII characters, no space (0x21–0x7E). */
@@ -33,7 +35,7 @@ public class PaymentController {
         this.payments = payments;
     }
 
-    @PostMapping(produces = MediaType.APPLICATION_JSON_VALUE)
+    @PostMapping
     public ResponseEntity<PaymentResponse> create(@AuthenticationPrincipal Jwt jwt,
                                                   @RequestHeader("Idempotency-Key") String idempotencyKey,
                                                   @Valid @RequestBody PaymentRequest request) {
@@ -41,7 +43,7 @@ public class PaymentController {
         return ResponseEntity.status(HttpStatus.CREATED).body(creation.create(tenantOf(jwt), request));
     }
 
-    @GetMapping(path = "/{id}", produces = MediaType.APPLICATION_JSON_VALUE)
+    @GetMapping("/{id}")
     public PaymentResponse get(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
         return payments.findByIdAndTenant(id, tenantOf(jwt))
                 .map(PaymentResponse::from)

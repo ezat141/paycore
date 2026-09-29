@@ -131,7 +131,7 @@ The two Spring applications run from Maven, not from compose, as the other platf
 | `amount` | required integer, minor units, `1 ≤ amount ≤ 1_000_000_000` |
 | `currency` | required, exactly one of `USD`, `EUR`, `GBP`, `EGP` (uppercase, no normalization) |
 | `cardToken` | required, matches `tok_[a-z0-9_]{1,60}` |
-| `description` | optional, at most 255 characters |
+| `description` | optional, at most 255 characters, no control characters (Unicode `Cc`, which includes NUL, tab and newline; Postgres refuses a NUL) |
 
 Unknown JSON fields are rejected (`400`), so a misspelt field can't be silently ignored.
 
