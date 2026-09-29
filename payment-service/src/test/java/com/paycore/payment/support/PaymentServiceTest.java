@@ -1,5 +1,6 @@
 package com.paycore.payment.support;
 
+import com.paycore.payment.payment.PaymentStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -11,6 +12,12 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
+
+import java.sql.Types;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.UUID;
 
 /**
  * Base for every test that needs the running service. Every subclass carries identical
@@ -53,5 +60,33 @@ public abstract class PaymentServiceTest {
 
     protected long paymentCount() {
         return jdbc.sql("SELECT count(*) FROM payments").query(Long.class).single();
+    }
+
+    /** Inserts a payment directly, for states and timestamps the API cannot produce on demand. */
+    protected UUID seedPayment(String tenant, PaymentStatus status, Instant createdAt,
+                               String authorizationId, Instant transitionStartedAt) {
+        UUID id = UUID.randomUUID();
+        jdbc.sql("""
+                        INSERT INTO payments (id, tenant, amount_minor, currency, card_token, status,
+                                              acquirer_authorization_id, transition_started_at,
+                                              version, created_at, updated_at)
+                        VALUES (:id, :tenant, 1999, 'USD', 'tok_approve', :status,
+                                :authorizationId, :transitionStartedAt, 0, :createdAt, :createdAt)""")
+                .param("id", id)
+                .param("tenant", tenant)
+                .param("status", status.name())
+                .param("authorizationId", authorizationId, Types.VARCHAR)
+                .param("transitionStartedAt", utc(transitionStartedAt), Types.TIMESTAMP_WITH_TIMEZONE)
+                .param("createdAt", utc(createdAt), Types.TIMESTAMP_WITH_TIMEZONE)
+                .update();
+        return id;
+    }
+
+    protected UUID seedPayment(String tenant, PaymentStatus status, Instant createdAt) {
+        return seedPayment(tenant, status, createdAt, null, null);
+    }
+
+    protected static OffsetDateTime utc(Instant instant) {
+        return instant == null ? null : OffsetDateTime.ofInstant(instant, ZoneOffset.UTC);
     }
 }
