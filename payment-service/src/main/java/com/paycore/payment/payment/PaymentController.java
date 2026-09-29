@@ -31,10 +31,12 @@ public class PaymentController {
     private static final Pattern IDEMPOTENCY_KEY = Pattern.compile("[\\x21-\\x7E]{1,255}");
 
     private final PaymentCreation creation;
+    private final PaymentTransitions transitions;
     private final PaymentRepository payments;
 
-    public PaymentController(PaymentCreation creation, PaymentRepository payments) {
+    public PaymentController(PaymentCreation creation, PaymentTransitions transitions, PaymentRepository payments) {
         this.creation = creation;
+        this.transitions = transitions;
         this.payments = payments;
     }
 
@@ -51,6 +53,16 @@ public class PaymentController {
         return payments.findByIdAndTenant(id, tenantOf(jwt))
                 .map(PaymentResponse::from)
                 .orElseThrow(ApiException::notFound);
+    }
+
+    @PostMapping("/{id}/capture")
+    public PaymentResponse capture(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
+        return transitions.capture(tenantOf(jwt), id);
+    }
+
+    @PostMapping("/{id}/void")
+    public PaymentResponse voidPayment(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
+        return transitions.voidPayment(tenantOf(jwt), id);
     }
 
     @GetMapping
