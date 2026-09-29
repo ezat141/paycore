@@ -435,6 +435,7 @@ The following tests are required. Each one pins a promise the design makes:
 - **Client-credentials tokens can't create payments.** They carry no `tenant` claim. Real merchants integrate server-to-server, so this is the most significant gap. M7 adds a tenant-bound machine client to AuthCore.
 - **`UNKNOWN` payments resolve only when the client retries.** A client that never retries leaves the payment `UNKNOWN`. M5 adds reconciliation against the acquirer.
 - **No resilience around the acquirer** beyond timeouts: no retry, circuit breaker or bulkhead (M5).
+- **A capture or void the acquirer refuses (4xx) leaves the payment `CAPTURING` or `VOIDING`.** Retries keep returning `502` "needs reconciliation" until M5's reconciliation resolves it against the acquirer; a restarted in-memory simulator is the realistic way to hit this locally.
 - **Idempotency rows are never purged.** Redis entries expire after 24 h, but the Postgres rows remain and keep replaying.
 - **A replay is a snapshot** (§7.6), not the payment's current state.
 - **Full capture only.** No partial captures, refunds or multi-capture.

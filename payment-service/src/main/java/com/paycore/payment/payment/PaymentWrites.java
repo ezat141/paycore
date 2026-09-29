@@ -52,8 +52,9 @@ public class PaymentWrites {
     }
 
     /**
-     * Claims a capture or void (spec §5.3 table). Two racing requests both read version N; the
-     * second to commit fails on {@code @Version} and never calls the acquirer.
+     * Claims a capture or void (spec §5.3 table). Two racing requests that both read version N:
+     * the second to commit fails on {@code @Version}. One that reads after the other committed
+     * sees the in-flight status instead.
      */
     @Transactional
     public Claim claimTransition(String tenant, UUID id, TransitionAction action, Duration staleAfter) {
@@ -79,7 +80,8 @@ public class PaymentWrites {
     @Transactional
     public Payment completeTransition(UUID id, TransitionAction action) {
         Payment payment = payments.findById(id).orElseThrow();
-        // A stale re-drive and the slow original can both arrive here; the second finds it done.
+        // Sequential completions find it done; truly concurrent ones lose on @Version and get a
+        // 409 whose retry returns 200.
         if (payment.getStatus() != action.done) {
             payment.completeTransition(action.done);
         }

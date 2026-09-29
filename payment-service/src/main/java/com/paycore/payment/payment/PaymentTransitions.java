@@ -3,14 +3,19 @@ package com.paycore.payment.payment;
 import com.paycore.payment.acquirer.AcquirerClient;
 import com.paycore.payment.acquirer.ActionOutcome;
 import com.paycore.payment.error.ApiException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 
 import java.util.UUID;
 
 /** Capture and void (spec §5.3). Not transactional: the acquirer call sits between two transactions. */
 @Service
 public class PaymentTransitions {
+
+    private static final Logger log = LoggerFactory.getLogger(PaymentTransitions.class);
 
     private final PaymentWrites writes;
     private final AcquirerClient acquirer;
@@ -45,9 +50,17 @@ public class PaymentTransitions {
 
     private PaymentResponse callAcquirer(Payment claimed, TransitionAction action) {
         String authorizationId = claimed.getAcquirerAuthorizationId();
-        ActionOutcome outcome = action == TransitionAction.CAPTURE
-                ? acquirer.capture(authorizationId)
-                : acquirer.voidAuthorization(authorizationId);
+        ActionOutcome outcome;
+        try {
+            outcome = action == TransitionAction.CAPTURE
+                    ? acquirer.capture(authorizationId)
+                    : acquirer.voidAuthorization(authorizationId);
+        } catch (HttpClientErrorException refused) {
+            // Left in CAPTURING/VOIDING, never reverted: the acquirer may have done it, and only
+            // reconciliation (M5) can resolve it against the acquirer's own record.
+            log.error("acquirer refused {} of payment {}: {}", action.verb, claimed.getId(), refused.getStatusCode());
+            throw ApiException.acquirerRefused(action.verb);
+        }
         if (outcome instanceof ActionOutcome.NoAnswer) {
             // Left in CAPTURING/VOIDING, never reverted: the acquirer may have done it. Once the
             // claim goes stale a retry re-drives it, which is safe because the acquirer's capture

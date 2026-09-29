@@ -57,6 +57,12 @@ public final class ApiException extends RuntimeException {
         return new ApiException(HttpStatus.BAD_GATEWAY, detail, extras, false);
     }
 
+    /** The acquirer refused a capture or void with a 4xx. The payment is left mid-transition. */
+    public static ApiException acquirerRefused(String verb) {
+        return new ApiException(HttpStatus.BAD_GATEWAY,
+                "acquirer refused the " + verb + "; the payment needs reconciliation", Map.of(), false);
+    }
+
     public HttpStatus status() {
         return status;
     }
