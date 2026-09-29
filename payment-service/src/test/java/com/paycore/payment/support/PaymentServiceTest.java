@@ -7,6 +7,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -34,7 +36,7 @@ import java.util.UUID;
         "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://localhost:9999/jwks",
         "paycore.acquirer.read-timeout=1s"})
 @AutoConfigureMockMvc
-@Import(PostgresContainerConfiguration.class)
+@Import({PostgresContainerConfiguration.class, RedisContainerConfiguration.class})
 public abstract class PaymentServiceTest {
 
     protected static final FakeAcquirer acquirer = FakeAcquirer.start();
@@ -50,6 +52,9 @@ public abstract class PaymentServiceTest {
     @Autowired
     protected JdbcClient jdbc;
 
+    @Autowired
+    protected StringRedisTemplate redis;
+
     /**
      * A spy on the shared bean, not a separate mock context: every subclass reuses one Spring
      * context. {@code @MockitoSpyBean} defaults to {@code MockReset.AFTER}, so Mockito resets its
@@ -62,6 +67,10 @@ public abstract class PaymentServiceTest {
     void resetState() {
         jdbc.sql("TRUNCATE idempotency_keys, payments").update();
         acquirer.reset();
+        redis.execute((RedisCallback<Void>) connection -> {
+            connection.serverCommands().flushAll();
+            return null;
+        });
     }
 
     protected ResultActions create(RequestPostProcessor token, String idempotencyKey, String body) throws Exception {
