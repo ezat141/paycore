@@ -20,8 +20,10 @@ import java.util.function.Consumer;
 /**
  * The parts of spec §6's acquirer contract that payment-service's tests exercise, in-process.
  * Same card-token behaviours as the real simulator — {@code tok_timeout} records the approval
- * <em>before</em> stalling — plus the counters and failure switches a test needs. It does not
- * model the simulator's 409 on a mismatched reference, its capture/void latency, or its 400 on a
+ * <em>before</em> stalling — plus the counters and failure switches a test needs. One behaviour is
+ * the fake's own: {@code tok_refuse} answers authorize with {@code 409} and records nothing,
+ * standing in for any 4xx refusal (the simulator's is a mismatched reference). It does not model
+ * the simulator's 409 on a mismatched reference itself, its capture/void latency, or its 400 on a
  * blank reference.
  */
 public final class FakeAcquirer implements AutoCloseable {
@@ -182,6 +184,10 @@ public final class FakeAcquirer implements AutoCloseable {
 
         if ("tok_error".equals(cardToken)) {
             send(exchange, 500, Map.of("error", "simulated acquirer failure"));
+            return;
+        }
+        if ("tok_refuse".equals(cardToken)) {
+            send(exchange, 409, Map.of("error", "simulated acquirer refusal"));
             return;
         }
         boolean[] created = {false};

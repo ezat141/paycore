@@ -10,6 +10,8 @@ import com.paycore.payment.idempotency.KeyRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -76,8 +78,18 @@ public class PaymentCreation {
      * comes back as that same authorization rather than a second one.
      */
     private CreateResult authorize(String tenant, String idempotencyKey, Payment payment) {
-        AuthorizeOutcome outcome = acquirer.authorize(payment.getId(), payment.getAmountMinor(),
-                payment.getCurrency(), payment.getCardToken());
+        AuthorizeOutcome outcome;
+        try {
+            outcome = acquirer.authorize(payment.getId(), payment.getAmountMinor(),
+                    payment.getCurrency(), payment.getCardToken());
+        } catch (HttpClientErrorException refused) {
+            // The acquirer answered, and said no: our record and theirs disagree. The payment stays
+            // PENDING, not UNKNOWN, because a retry will not resolve it; reconciliation (M5) must.
+            // The lease is released so a retry hears this same 502, not a false "in progress".
+            log.error("acquirer refused authorization of payment {}: {}", payment.getId(), refused.getStatusCode());
+            releaseQuietly(tenant, idempotencyKey);
+            throw ApiException.acquirerRefused("authorization", payment.getId());
+        }
         Payment settled;
         try {
             settled = writes.recordAuthorizeOutcome(tenant, idempotencyKey, payment.getId(), outcome);
@@ -96,8 +108,9 @@ public class PaymentCreation {
     }
 
     /**
-     * Lets the client's retry re-drive at once, as it can after no answer. If the database is
-     * what failed this may fail too; then the lease simply lapses after lock-ttl.
+     * Lets the client's retry re-drive at once, as it can after no answer, rather than hear a
+     * false "in progress". If the database is what failed this may fail too; then the lease
+     * simply lapses after lock-ttl.
      */
     private void releaseQuietly(String tenant, String idempotencyKey) {
         try {
@@ -108,6 +121,11 @@ public class PaymentCreation {
     }
 
     private CreateResult replay(int status, String body) {
-        return CreateResult.replay(status, json.readValue(body, PaymentResponse.class));
+        // Lenient on unknown fields: snapshots are never purged, and one stored before a field was
+        // removed from PaymentResponse must still replay rather than become a 500.
+        PaymentResponse snapshot = json.readerFor(PaymentResponse.class)
+                .without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                .readValue(body);
+        return CreateResult.replay(status, snapshot);
     }
 }

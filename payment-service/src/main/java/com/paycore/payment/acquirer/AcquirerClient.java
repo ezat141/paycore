@@ -20,8 +20,8 @@ import java.util.UUID;
  * any point in the exchange (including one that lands after the headers arrive, since the read
  * timeout is a deadline on the whole exchange), a refused connection, a 5xx, or a body we cannot
  * read or do not recognise (truncated or malformed JSON, a missing or unrecognised status). A 4xx
- * is left to throw: the state machine should make one impossible, so seeing one is a bug worth a
- * 500.
+ * is different: the acquirer answered, and refused. It is left to throw as
+ * {@code HttpClientErrorException}, and callers map it to a 502 "needs reconciliation".
  */
 @Component
 public class AcquirerClient {
@@ -62,8 +62,8 @@ public class AcquirerClient {
                     .body(new AuthorizationCall(reference.toString(), amount, currency, cardToken))
                     .retrieve()
                     .body(AuthorizationReply.class);
-        } catch (HttpClientErrorException bug) {
-            throw bug;   // a 4xx: our state machine should make it impossible, so it is a bug worth a 500
+        } catch (HttpClientErrorException refused) {
+            throw refused;   // a 4xx: the acquirer refused; callers answer 502 "needs reconciliation"
         } catch (RestClientException noAnswer) {
             log.warn("acquirer gave no answer for payment {}: {}", reference, noAnswer.getMessage());
             return new AuthorizeOutcome.NoAnswer();
@@ -97,8 +97,8 @@ public class AcquirerClient {
                     .retrieve()
                     .body(ActionReply.class);
             return new ActionOutcome.Completed();
-        } catch (HttpClientErrorException bug) {
-            throw bug;   // a 4xx: our state machine should make it impossible, so it is a bug worth a 500
+        } catch (HttpClientErrorException refused) {
+            throw refused;   // a 4xx: the acquirer refused; callers answer 502 "needs reconciliation"
         } catch (RestClientException noAnswer) {
             log.warn("acquirer gave no answer to {} of {}: {}", action, authorizationId, noAnswer.getMessage());
             return new ActionOutcome.NoAnswer();

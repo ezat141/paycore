@@ -8,12 +8,15 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.web.servlet.ResultActions;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.paycore.payment.support.Requests.body;
 import static com.paycore.payment.support.Requests.read;
@@ -33,6 +36,8 @@ class IdempotencyTest extends PaymentServiceTest {
     private static final String BODY_FINGERPRINT =
             Fingerprint.of(new PaymentRequest(1999L, "USD", "tok_approve", null));
     private static final Duration LEASE = Duration.ofSeconds(30);
+    private static final String REFUSED = "acquirer refused the authorization; the payment needs reconciliation";
+    private static final String IN_PROGRESS = "a request with this Idempotency-Key is in progress";
 
     @Autowired
     private IdempotencyKeyStore keys;
@@ -176,6 +181,60 @@ class IdempotencyTest extends PaymentServiceTest {
         assertThat(acquirer.authorizationsRecorded()).isEqualTo(1);
     }
 
+    /**
+     * The acquirer answered, and said no. Neither AUTHORIZED nor DECLINED is known, and a retry
+     * will not resolve it, so the payment stays PENDING (not UNKNOWN) and the client learns its id.
+     * The lease is released: a retry re-drives and hears the same 502, never a false "in progress".
+     */
+    @Test
+    void anAcquirerRefusalOnAuthorizeTellsTheClientItsPaymentId() throws Exception {
+        String refused = body(1999, "tok_refuse");
+        String paymentId = read(create(Tokens.writer("acme"), "order-3", refused)
+                .andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.detail").value(REFUSED))
+                .andExpect(jsonPath("$.paymentId").isNotEmpty()), "$.paymentId");
+        mockMvc.perform(get("/payments/{id}", paymentId).with(Tokens.reader("acme")))
+                .andExpect(jsonPath("$.status").value("PENDING"));
+
+        create(Tokens.writer("acme"), "order-3", refused)
+                .andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.detail").value(REFUSED))
+                .andExpect(jsonPath("$.paymentId").value(paymentId));
+        assertThat(paymentCount()).isEqualTo(1);
+        assertThat(acquirer.authorizeCalls(UUID.fromString(paymentId))).isEqualTo(2);
+    }
+
+    /**
+     * Pins the lease taken at insert. The retry is sent from inside the acquirer's handler, so it
+     * arrives while the first request is certainly still waiting for its answer. With no lease
+     * (or a lapsed one) it would claim the key and call the acquirer a second time.
+     */
+    @Test
+    void aRetryDuringTheFirstRequestIsToldItIsInProgress() throws Exception {
+        AtomicBoolean fired = new AtomicBoolean();
+        AtomicReference<MockHttpServletResponse> retry = new AtomicReference<>();
+        AtomicReference<Exception> retryFailure = new AtomicReference<>();
+        acquirer.onAuthorize(reference -> {
+            if (!fired.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                retry.set(create(Tokens.writer("acme"), "order-11", BODY).andReturn().getResponse());
+            } catch (Exception e) {
+                retryFailure.set(e);
+            }
+        });
+
+        ResultActions first = create(Tokens.writer("acme"), "order-11", BODY);
+
+        assertThat(retryFailure.get()).isNull();
+        assertThat(retry.get()).as("the retry ran").isNotNull();
+        assertThat(retry.get().getStatus()).isEqualTo(409);
+        assertThat(retry.get().getContentAsString()).contains("\"detail\":\"" + IN_PROGRESS + "\"");
+        assertThat(acquirer.totalAuthorizeCalls()).isEqualTo(1);
+        first.andExpect(status().isCreated());
+    }
+
     @Test
     void aRequestStillHoldingTheKeyMeansTryAgainShortly() throws Exception {
         UUID paymentId = seedPayment("acme", PaymentStatus.PENDING, Instant.now());
@@ -227,6 +286,54 @@ class IdempotencyTest extends PaymentServiceTest {
         assertThat(keys.claimExpired("acme", "order-10", LEASE)).isFalse();
     }
 
+    /** Two tenants' keys with the same name: a claim or release of one never touches the other. */
+    @Test
+    void claimingAKeyLeavesAnotherTenantsKeyAlone() {
+        seedKey("acme", "order-9", BODY_FINGERPRINT, seedPayment("acme", PaymentStatus.PENDING, Instant.now()),
+                Instant.now().minusSeconds(30));
+        seedKey("globex", "order-9", BODY_FINGERPRINT, seedPayment("globex", PaymentStatus.PENDING, Instant.now()),
+                Instant.now().minusSeconds(30));
+
+        assertThat(keys.claimExpired("acme", "order-9", LEASE)).isTrue();
+
+        assertThat(leaseLive("acme", "order-9")).isTrue();
+        assertThat(leaseLive("globex", "order-9")).isFalse();
+    }
+
+    @Test
+    void releasingAKeyLeavesAnotherTenantsKeyAlone() {
+        seedKey("acme", "order-9", BODY_FINGERPRINT, seedPayment("acme", PaymentStatus.PENDING, Instant.now()),
+                Instant.now().plusSeconds(30));
+        seedKey("globex", "order-9", BODY_FINGERPRINT, seedPayment("globex", PaymentStatus.PENDING, Instant.now()),
+                Instant.now().plusSeconds(30));
+
+        keys.release("acme", "order-9");
+
+        assertThat(leaseLive("acme", "order-9")).isFalse();
+        assertThat(leaseLive("globex", "order-9")).isTrue();
+    }
+
+    /**
+     * Snapshots are never purged, so one stored before a response field was removed must still
+     * replay: a field the stored body has and today's response does not is ignored.
+     */
+    @Test
+    void aSnapshotWithAFieldTheResponseNoLongerHasStillReplays() throws Exception {
+        UUID paymentId = seedPayment("acme", PaymentStatus.AUTHORIZED, Instant.now());
+        seedKey("acme", "order-9", BODY_FINGERPRINT, paymentId, Instant.now().minusSeconds(30));
+        keys.complete("acme", "order-9", 201, """
+                {"id":"%s","status":"AUTHORIZED","amount":1999,"currency":"USD","description":null,
+                 "declineCode":null,"createdAt":"2026-09-01T10:00:00Z","updatedAt":"2026-09-01T10:00:00Z",
+                 "retiredField":"from an older release"}""".formatted(paymentId));
+
+        create(Tokens.writer("acme"), "order-9", BODY)
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Idempotent-Replayed", "true"))
+                .andExpect(jsonPath("$.id").value(paymentId.toString()))
+                .andExpect(jsonPath("$.retiredField").doesNotExist());
+        assertThat(acquirer.totalAuthorizeCalls()).isZero();
+    }
+
     @Test
     void aCompletedKeyIsNeverClaimed() {
         UUID paymentId = seedPayment("acme", PaymentStatus.AUTHORIZED, Instant.now());
@@ -234,5 +341,13 @@ class IdempotencyTest extends PaymentServiceTest {
         keys.complete("acme", "order-9", 201, "{}");
 
         assertThat(keys.claimExpired("acme", "order-9", LEASE)).isFalse();
+    }
+
+    private boolean leaseLive(String tenant, String key) {
+        return jdbc.sql("SELECT locked_until > now() FROM idempotency_keys WHERE tenant = :tenant AND idempotency_key = :key")
+                .param("tenant", tenant)
+                .param("key", key)
+                .query(Boolean.class)
+                .single();
     }
 }
