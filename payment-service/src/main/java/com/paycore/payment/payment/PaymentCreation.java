@@ -4,6 +4,7 @@ import com.paycore.payment.acquirer.AcquirerClient;
 import com.paycore.payment.acquirer.AuthorizeOutcome;
 import com.paycore.payment.error.ApiException;
 import com.paycore.payment.idempotency.Fingerprint;
+import com.paycore.payment.idempotency.IdempotencyCache;
 import com.paycore.payment.idempotency.IdempotencyKeyStore;
 import com.paycore.payment.idempotency.IdempotencyProperties;
 import com.paycore.payment.idempotency.KeyRecord;
@@ -14,12 +15,16 @@ import org.springframework.web.client.HttpClientErrorException;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.Optional;
+import java.util.UUID;
+
 /**
  * Idempotent payment creation (spec §7) around the authorize flow (spec §5.3). Deliberately
  * not transactional: see PaymentWrites.
  *
  * <p>Postgres is the guarantee. The key row and the PENDING payment are inserted in one
- * transaction, so its primary key alone prevents two payments for one key.
+ * transaction, so its primary key alone prevents two payments for one key. Redis sits in
+ * front as a fast path only — see IdempotencyCache for why failing open is safe.
  */
 @Service
 public class PaymentCreation {
@@ -32,22 +37,81 @@ public class PaymentCreation {
     private final PaymentWrites writes;
     private final PaymentRepository payments;
     private final IdempotencyKeyStore keys;
+    private final IdempotencyCache cache;
     private final AcquirerClient acquirer;
     private final IdempotencyProperties properties;
     private final ObjectMapper json;
 
     public PaymentCreation(PaymentWrites writes, PaymentRepository payments, IdempotencyKeyStore keys,
-                           AcquirerClient acquirer, IdempotencyProperties properties, ObjectMapper json) {
+                           IdempotencyCache cache, AcquirerClient acquirer, IdempotencyProperties properties,
+                           ObjectMapper json) {
         this.writes = writes;
         this.payments = payments;
         this.keys = keys;
+        this.cache = cache;
         this.acquirer = acquirer;
         this.properties = properties;
         this.json = json;
     }
 
+    /** Spec §7.4, top to bottom. */
     public CreateResult create(String tenant, String idempotencyKey, PaymentRequest request) {
-        return throughDatabase(tenant, idempotencyKey, Fingerprint.of(request), request);
+        String fingerprint = Fingerprint.of(request);
+
+        Optional<CreateResult> cached = fromCache(tenant, idempotencyKey, fingerprint);
+        if (cached.isPresent()) {
+            return cached.get();
+        }
+
+        String owner = UUID.randomUUID().toString();
+        if (cache.tryLock(tenant, idempotencyKey, fingerprint, owner) == IdempotencyCache.LockResult.HELD) {
+            // Another request holds the key right now: answer from what it left, or ask for a retry.
+            return fromCache(tenant, idempotencyKey, fingerprint)
+                    .orElseThrow(() -> ApiException.inProgress(IN_PROGRESS));
+        }
+        CreateResult result;
+        try {
+            result = throughDatabase(tenant, idempotencyKey, fingerprint, request);
+        } catch (RuntimeException e) {
+            // Nothing this request may cache: a 422 or 409 is about another request's attempt, a 502
+            // is never stored (spec §7.5), and a fault recorded nothing. Give up our lock so a retry
+            // goes straight back to Postgres rather than waiting out lock-ttl.
+            cache.release(tenant, idempotencyKey, owner);
+            throw e;
+        }
+        // Outside the try, and IdempotencyCache never throws: once Postgres has recorded the
+        // outcome, no cache fault can turn it into a 500.
+        cache.complete(tenant, idempotencyKey, fingerprint, result.status(), result.body());
+        return result;
+    }
+
+    /**
+     * A completed entry replays, or is 422 if its fingerprint differs. An in-progress entry is 409
+     * whatever its fingerprint: an in-flight attempt was never checked against Postgres, so it is
+     * not authoritative, and a 422 on its word could refuse a key that Postgres would replay.
+     *
+     * <p>A completed entry whose body will not replay is dropped and treated as a miss, so the
+     * request falls through to Postgres, which replays its own snapshot and repopulates Redis.
+     */
+    private Optional<CreateResult> fromCache(String tenant, String idempotencyKey, String fingerprint) {
+        Optional<IdempotencyCache.Cached> cached = cache.get(tenant, idempotencyKey);
+        if (cached.isEmpty()) {
+            return Optional.empty();
+        }
+        IdempotencyCache.Entry entry = cached.get().entry();
+        if (!entry.completed()) {
+            throw ApiException.inProgress(IN_PROGRESS);
+        }
+        if (!entry.fingerprint().equals(fingerprint)) {
+            throw ApiException.keyReused();
+        }
+        try {
+            return Optional.of(replay(entry.responseStatus(), entry.responseBody()));
+        } catch (RuntimeException e) {
+            log.warn("cached response for an Idempotency-Key will not replay; dropping it: {}", e.getClass().getName());
+            cache.discard(tenant, idempotencyKey, cached.get());
+            return Optional.empty();
+        }
     }
 
     private CreateResult throughDatabase(String tenant, String idempotencyKey, String fingerprint, PaymentRequest request) {

@@ -30,12 +30,21 @@ spring:
       accept-float-as-int: false         # 19.99 must be refused, never truncated to 19
     mapper:
       allow-coercion-of-scalars: false   # "1999" for amount must be refused, not coerced to a number
+  data:
+    redis:
+      host: localhost
+      port: 6380
+      timeout: 200ms            # an unreachable Redis costs at most this per call (spec §7.3)
+      connect-timeout: 200ms
 
 management:
   endpoints:
     web:
       exposure:
         include: health,info
+  health:
+    redis:
+      enabled: false            # Redis is optional (it fails open); its absence must not mark us DOWN
 
 paycore:
   acquirer:
@@ -46,3 +55,4 @@ paycore:
     transition-stale-after: 30s
   idempotency:
     lock-ttl: 30s      # the lease on a key while a request runs; far above the acquirer read timeout
+    response-ttl: 24h  # how long Redis keeps a completed response; Postgres keeps it indefinitely

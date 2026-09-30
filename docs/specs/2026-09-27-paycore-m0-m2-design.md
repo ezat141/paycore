@@ -264,7 +264,7 @@ Because `tok_timeout` records the authorization before sleeping, a retry with th
 
 A SHA-256 hex digest of the canonical JSON of the validated request, with fields in the fixed order `amount`, `currency`, `cardToken`, `description`, and an absent `description` encoded as `null`.
 
-The same key with a different fingerprint → `422` with `detail: "Idempotency-Key was already used with a different request"`. This applies whatever state the key is in.
+The same key with a different fingerprint → `422` with `detail: "Idempotency-Key was already used with a different request"`. Postgres gives it whatever state the key's row is in, and so does a `COMPLETED` Redis entry. A Redis `IN_PROGRESS` lock answers `409` first, whatever its fingerprint: an in-flight attempt's fingerprint has not been checked against Postgres, so it is not grounds for a `422` (§7.4).
 
 ### 7.3 Storage
 
@@ -291,7 +291,7 @@ The row is inserted in the **same transaction** as the `PENDING` payment (§5.3 
 - **Release:** a Lua compare-and-delete on `owner`, so a request whose lock has expired can never delete another request's lock.
 - Lettuce command timeout is 200 ms, so an unreachable Redis costs at most that per call.
 
-**Redis fails open.** Any Redis error is logged at `WARN` and treated as a cache miss / lock acquired, and the request continues on the Postgres path. This is safe **only** because Postgres, not Redis, enforces the guarantee. A comment in `IdempotencyCache` and a paragraph in the README both say so.
+**Redis fails open.** Any Redis failure is logged at `WARN` and treated as a cache miss / lock acquired, and the request continues on the Postgres path. That includes an entry that can't be read or is incomplete, which is also deleted, and a failure after Postgres has recorded the outcome, which never changes the response. This is safe **only** because Postgres, not Redis, enforces the guarantee. A comment in `IdempotencyCache` and a paragraph in the README both say so.
 
 Settings: `paycore.idempotency.lock-ttl` (30 s, must exceed the acquirer read timeout by a wide margin) and `paycore.idempotency.response-ttl` (24 h, Redis only).
 
@@ -301,8 +301,8 @@ Settings: `paycore.idempotency.lock-ttl` (30 s, must exceed the acquirer read ti
 validate → fingerprint F
 │
 ├─ Redis GET  ──COMPLETED──▶ F matches? replay stored response  : 422
-│             ──IN_PROGRESS─▶ F matches? 409 in progress         : 422
-│             ──miss / Redis down──▼
+│             ──IN_PROGRESS─▶ 409 in progress (whatever the fingerprint: an in-flight attempt's fingerprint is not authoritative)
+│             ──miss / Redis down / entry unreadable (deleted)──▼
 ├─ Redis SET NX lock ──not acquired──▶ re-read, as above
 │                    ──acquired / Redis down──▼
 ├─ DB Tx 1: INSERT payment(PENDING) + idempotency_keys(IN_PROGRESS, locked_until = now + lock-ttl)
@@ -439,6 +439,7 @@ The following tests are required. Each one pins a promise the design makes:
 - **A capture or void the acquirer refuses (4xx) leaves the payment `CAPTURING` or `VOIDING`.** A retry within the 30 s window gets `409` "capture in progress" (or "void in progress"); every stale retry gets `502` "needs reconciliation" again, until M5's reconciliation resolves it against the acquirer; a restarted in-memory simulator is the realistic way to hit this locally.
 - **An authorization the acquirer refuses (4xx) leaves the payment's status unchanged**: `PENDING` on a first attempt, `UNKNOWN` if it is a re-drive of a payment that earlier got no answer. It is never moved to `UNKNOWN` for the refusal, which promises that a retry resolves it: here none will. The response is `502` "needs reconciliation" with `paymentId`, and the key's lease is released, so every retry with the same key re-drives and gets that same `502`, until M5's reconciliation resolves it against the acquirer.
 - **The Postgres lease has no owner fence.** A request that stalls past its lease (30 s, far above the acquirer's timeouts) can release or complete a key a later request has since claimed. The cost is at most extra acquirer calls and a `502`, never a double charge: every attempt uses the same payment id as the acquirer's `reference`, and the acquirer deduplicates on it.
+- **A stale Redis lock delays a re-drive or a replay by up to lock-ttl.** A Redis `IN_PROGRESS` lock left behind by a crashed request, or by a release or completion that never reached Redis, answers every retry with a retryable `409` until it expires, up to lock-ttl (30 s), even where Postgres would already allow a re-drive (after a lost release) or replay the stored response (after a lost completion). A release or completion is lost when its command times out, for example during a Redis pause, or when a release's `EVALSHA` times out and then runs late against a Redis that restarted with an empty script cache. A plain `NOSCRIPT` is not a problem: the client falls back to `EVAL` and the release goes through. It never causes a double charge or a wrong answer; the retry succeeds once the lock lapses.
 - **Idempotency rows are never purged.** Redis entries expire after 24 h, but the Postgres rows remain and keep replaying.
 - **A replay is a snapshot** (§7.6), not the payment's current state.
 - **Full capture only.** No partial captures, refunds or multi-capture.
