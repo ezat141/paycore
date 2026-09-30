@@ -4,6 +4,8 @@ import com.paycore.payment.payment.PaymentRequest;
 import com.paycore.payment.support.PaymentServiceTest;
 import com.paycore.payment.support.Tokens;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.connection.RedisConnection;
@@ -179,7 +181,31 @@ class IdempotencyCacheTest extends PaymentServiceTest {
                 .andExpect(status().isCreated())
                 .andExpect(header().string("Idempotent-Replayed", "true"));
         assertThat(redis.opsForValue().get(KEY)).contains("\"state\":\"COMPLETED\"");
-        assertThat(cache.get("acme", "order-1")).get().extracting(IdempotencyCache.Entry::completed).isEqualTo(true);
+        assertThat(cache.get("acme", "order-1")).get().extracting(cached -> cached.entry().completed()).isEqualTo(true);
+        assertThat(acquirer.totalAuthorizeCalls()).isEqualTo(1);
+    }
+
+    /**
+     * The entry itself is well formed, but the response it holds will not replay. It is dropped like
+     * any unusable entry, and Postgres replays its own snapshot and puts a good one back. The three
+     * bodies are the review's probes: not JSON, a wrongly typed field, and a missing primitive.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"{not json", "{\"amount\":\"abc\"}", "{}"})
+    void aCompletedRedisEntryWhoseBodyWillNotReplayIsDiscarded(String badBody) throws Exception {
+        create(Tokens.writer("acme"), "order-1", BODY).andExpect(status().isCreated());
+        redis.opsForValue().set(KEY, """
+                {"state":"COMPLETED","fingerprint":"%s","owner":null,"responseStatus":201,"responseBody":"%s"}"""
+                .formatted(BODY_FINGERPRINT, badBody.replace("\"", "\\\"")));
+
+        create(Tokens.writer("acme"), "order-1", BODY)
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Idempotent-Replayed", "true"))
+                .andExpect(jsonPath("$.status").value("AUTHORIZED"));
+        assertThat(redis.opsForValue().get(KEY)).contains("\"state\":\"COMPLETED\"");
+        assertThat(cache.get("acme", "order-1")).get()
+                .extracting(cached -> cached.entry().responseBody()).asString().contains("\"status\":\"AUTHORIZED\"");
+        assertThat(paymentCount()).isEqualTo(1);
         assertThat(acquirer.totalAuthorizeCalls()).isEqualTo(1);
     }
 

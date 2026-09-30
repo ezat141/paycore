@@ -89,19 +89,29 @@ public class PaymentCreation {
      * A completed entry replays, or is 422 if its fingerprint differs. An in-progress entry is 409
      * whatever its fingerprint: an in-flight attempt was never checked against Postgres, so it is
      * not authoritative, and a 422 on its word could refuse a key that Postgres would replay.
+     *
+     * <p>A completed entry whose body will not replay is dropped and treated as a miss, so the
+     * request falls through to Postgres, which replays its own snapshot and repopulates Redis.
      */
     private Optional<CreateResult> fromCache(String tenant, String idempotencyKey, String fingerprint) {
-        Optional<IdempotencyCache.Entry> entry = cache.get(tenant, idempotencyKey);
-        if (entry.isEmpty()) {
+        Optional<IdempotencyCache.Cached> cached = cache.get(tenant, idempotencyKey);
+        if (cached.isEmpty()) {
             return Optional.empty();
         }
-        if (!entry.get().completed()) {
+        IdempotencyCache.Entry entry = cached.get().entry();
+        if (!entry.completed()) {
             throw ApiException.inProgress(IN_PROGRESS);
         }
-        if (!entry.get().fingerprint().equals(fingerprint)) {
+        if (!entry.fingerprint().equals(fingerprint)) {
             throw ApiException.keyReused();
         }
-        return Optional.of(replay(entry.get().responseStatus(), entry.get().responseBody()));
+        try {
+            return Optional.of(replay(entry.responseStatus(), entry.responseBody()));
+        } catch (RuntimeException e) {
+            log.warn("cached response for an Idempotency-Key will not replay; dropping it: {}", e.getClass().getName());
+            cache.discard(tenant, idempotencyKey, cached.get());
+            return Optional.empty();
+        }
     }
 
     private CreateResult throughDatabase(String tenant, String idempotencyKey, String fingerprint, PaymentRequest request) {

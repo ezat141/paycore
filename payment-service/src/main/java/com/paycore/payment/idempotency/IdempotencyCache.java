@@ -73,6 +73,13 @@ public class IdempotencyCache {
         }
     }
 
+    /**
+     * An entry as read, with the exact value stored, so a caller that finds it cannot be used
+     * after all (a completed body that will not replay) can {@link #discard} precisely that value.
+     */
+    public record Cached(Entry entry, String stored) {
+    }
+
     public enum LockResult { ACQUIRED, HELD, UNAVAILABLE }
 
     private final StringRedisTemplate redis;
@@ -88,7 +95,7 @@ public class IdempotencyCache {
      * used. An unusable entry is deleted: treated as a mere miss, it would still make every
      * {@link #tryLock} return HELD, and every request would get 409 until it expired.
      */
-    public Optional<Entry> get(String tenant, String key) {
+    public Optional<Cached> get(String tenant, String key) {
         String redisKey = redisKey(tenant, key);
         String value;
         try {
@@ -107,11 +114,18 @@ public class IdempotencyCache {
             entry = null;
         }
         if (entry == null || !entry.usable()) {
-            log.warn("discarding an unusable idempotency entry at {}; continuing on postgres", redisKey);
             discard(redisKey, value);
             return Optional.empty();
         }
-        return Optional.of(entry);
+        return Optional.of(new Cached(entry, value));
+    }
+
+    /**
+     * Deletes an entry that turned out to be unusable, and only if it is still the value read:
+     * whatever has replaced it since is left alone. Never throws.
+     */
+    public void discard(String tenant, String key, Cached unusable) {
+        discard(redisKey(tenant, key), unusable.stored());
     }
 
     public LockResult tryLock(String tenant, String key, String fingerprint, String owner) {
@@ -153,6 +167,7 @@ public class IdempotencyCache {
     }
 
     private void discard(String redisKey, String value) {
+        log.warn("discarding an unusable idempotency entry at {}; continuing on postgres", redisKey);
         try {
             redis.execute(DELETE_IF_UNCHANGED, List.of(redisKey), value);
         } catch (RuntimeException e) {
