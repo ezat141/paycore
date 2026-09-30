@@ -15,12 +15,16 @@ import java.util.concurrent.TimeUnit;
 
 import static com.paycore.payment.support.Requests.body;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 class IdempotencyConcurrencyTest extends PaymentServiceTest {
 
     /**
      * Twenty copies of the same request released at once, with the acquirer slow enough that
-     * they overlap. Exactly one charge; everyone else is told to wait or handed the replay.
+     * they overlap. Exactly one charge; everyone else is told to wait or handed the replay. And
+     * Redis turned the other nineteen away: only one of them reached Postgres.
      */
     @Test
     void twentyConcurrentRetriesProduceOnePaymentAndOneCharge() throws Exception {
@@ -30,6 +34,7 @@ class IdempotencyConcurrencyTest extends PaymentServiceTest {
         assertThat(statuses).allMatch(status -> status == 201 || status == 409).contains(201);
         assertThat(paymentCount()).isEqualTo(1);
         assertThat(acquirer.totalAuthorizeCalls()).isEqualTo(1);
+        verify(paymentWrites, times(1)).start(any(), any(), any(), any(), any());
     }
 
     private List<Integer> fire(int copies, String idempotencyKey) throws Exception {

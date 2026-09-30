@@ -69,28 +69,37 @@ public class PaymentCreation {
             return fromCache(tenant, idempotencyKey, fingerprint)
                     .orElseThrow(() -> ApiException.inProgress(IN_PROGRESS));
         }
+        CreateResult result;
         try {
-            CreateResult result = throughDatabase(tenant, idempotencyKey, fingerprint, request);
-            cache.complete(tenant, idempotencyKey, fingerprint, result.status(), json.writeValueAsString(result.body()));
-            return result;
+            result = throughDatabase(tenant, idempotencyKey, fingerprint, request);
         } catch (RuntimeException e) {
-            // 422, 409, 502 or a fault: none of them completes the key, so give up our lock.
+            // Nothing this request may cache: a 422 or 409 is about another request's attempt, a 502
+            // is never stored (spec §7.5), and a fault recorded nothing. Give up our lock so a retry
+            // goes straight back to Postgres rather than waiting out lock-ttl.
             cache.release(tenant, idempotencyKey, owner);
             throw e;
         }
+        // Outside the try, and IdempotencyCache never throws: once Postgres has recorded the
+        // outcome, no cache fault can turn it into a 500.
+        cache.complete(tenant, idempotencyKey, fingerprint, result.status(), result.body());
+        return result;
     }
 
-    /** A completed entry replays; a held one is 409; either with another fingerprint is 422. */
+    /**
+     * A completed entry replays, or is 422 if its fingerprint differs. An in-progress entry is 409
+     * whatever its fingerprint: an in-flight attempt was never checked against Postgres, so it is
+     * not authoritative, and a 422 on its word could refuse a key that Postgres would replay.
+     */
     private Optional<CreateResult> fromCache(String tenant, String idempotencyKey, String fingerprint) {
         Optional<IdempotencyCache.Entry> entry = cache.get(tenant, idempotencyKey);
         if (entry.isEmpty()) {
             return Optional.empty();
         }
-        if (!entry.get().fingerprint().equals(fingerprint)) {
-            throw ApiException.keyReused();
-        }
         if (!entry.get().completed()) {
             throw ApiException.inProgress(IN_PROGRESS);
+        }
+        if (!entry.get().fingerprint().equals(fingerprint)) {
+            throw ApiException.keyReused();
         }
         return Optional.of(replay(entry.get().responseStatus(), entry.get().responseBody()));
     }

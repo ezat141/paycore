@@ -2,6 +2,7 @@ package com.paycore.payment.support;
 
 import com.paycore.payment.payment.PaymentRepository;
 import com.paycore.payment.payment.PaymentStatus;
+import com.paycore.payment.payment.PaymentWrites;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -31,10 +32,16 @@ import java.util.UUID;
  * <p>The acquirer's read timeout is 1s here, not the 2s default, so {@code tok_timeout} tests take a
  * second; the fake stalls for three. Not lower: Spring's read timeout covers the whole exchange,
  * so a cold JVM's first call (HttpClient and Jackson warm-up) must fit inside it.
+ *
+ * <p>Redis timeouts are 2s here, not the production 200ms. Through Docker Desktop's port proxy a
+ * cold Lettuce connection can take longer than 200ms to initialise, and {@code resetState}'s flush
+ * would then fail the test. RedisDownTest and RedisPausedTest keep 200ms, which is what they test.
  */
 @SpringBootTest(properties = {
         "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://localhost:9999/jwks",
-        "paycore.acquirer.read-timeout=1s"})
+        "paycore.acquirer.read-timeout=1s",
+        "spring.data.redis.timeout=2s",
+        "spring.data.redis.connect-timeout=2s"})
 @AutoConfigureMockMvc
 @Import({PostgresContainerConfiguration.class, RedisContainerConfiguration.class})
 public abstract class PaymentServiceTest {
@@ -52,7 +59,8 @@ public abstract class PaymentServiceTest {
     @Autowired
     protected JdbcClient jdbc;
 
-    @Autowired
+    /** A spy, so a test can make one Redis call fail; unstubbed, it is the real template. */
+    @MockitoSpyBean
     protected StringRedisTemplate redis;
 
     /**
@@ -62,6 +70,10 @@ public abstract class PaymentServiceTest {
      */
     @MockitoSpyBean
     protected PaymentRepository paymentRepository;
+
+    /** Lets a test prove a request was answered without reaching Postgres. */
+    @MockitoSpyBean
+    protected PaymentWrites paymentWrites;
 
     @BeforeEach
     void resetState() {
