@@ -81,6 +81,18 @@ class SecurityBoundaryTest extends PaymentServiceTest {
                 .andExpect(jsonPath("$.detail").value("insufficient permission"));
     }
 
+    /**
+     * A real client-credentials token, shaped as AuthCore issues it: the scopes, and no tenant,
+     * roles or permissions claim. It lacks the permission, which is checked first, so it never
+     * reaches the tenant check.
+     */
+    @Test
+    void aClientCredentialsTokenIsRefusedForLackingPermission() throws Exception {
+        mockMvc.perform(get("/payments").with(Tokens.clientCredentials("payments:read", "payments:write")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.detail").value("insufficient permission"));
+    }
+
     @Test
     void authorizationRunsBeforeTheBodyIsParsed() throws Exception {
         mockMvc.perform(post("/payments").with(Tokens.reader("acme"))

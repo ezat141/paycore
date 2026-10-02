@@ -41,7 +41,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health
   health:
     redis:
       enabled: false            # Redis is optional (it fails open); its absence must not mark us DOWN

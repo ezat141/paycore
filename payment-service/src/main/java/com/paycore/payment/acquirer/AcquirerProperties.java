@@ -8,7 +8,7 @@ import java.time.Duration;
 
 @ConfigurationProperties("paycore.acquirer")
 public record AcquirerProperties(
-        URI baseUrl,
+        @DefaultValue("http://localhost:8091") URI baseUrl,
         @DefaultValue("1s") Duration connectTimeout,
         @DefaultValue("2s") Duration readTimeout) {
 }

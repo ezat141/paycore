@@ -26,9 +26,23 @@ public final class Tokens {
         return token(tenant, List.of("payments:read"), List.of("payments:read"));
     }
 
-    /** A client-credentials-shaped token: scopes, but no user and so no tenant or permissions. */
+    /**
+     * Scopes and permissions, but no tenant. AuthCore does not issue this today: it adds
+     * {@code tenant}, {@code roles} and {@code permissions} together or not at all. It exists to
+     * pin the tenant check, which is defence in depth for exactly this shape.
+     */
     public static JwtRequestPostProcessor withoutTenant() {
         return token(null, BOTH, BOTH);
+    }
+
+    /**
+     * What AuthCore issues for client credentials: scopes only. No user, so no tenant, roles or
+     * permissions claim at all.
+     */
+    public static JwtRequestPostProcessor clientCredentials(String... scopes) {
+        return jwt()
+                .jwt(builder -> builder.subject("authcore-machine").claim("scope", String.join(" ", scopes)))
+                .authorities(new AuthCoreAuthoritiesConverter());
     }
 
     public static JwtRequestPostProcessor token(String tenant, List<String> scopes, List<String> permissions) {

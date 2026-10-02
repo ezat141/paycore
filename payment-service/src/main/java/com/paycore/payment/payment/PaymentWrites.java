@@ -98,6 +98,9 @@ public class PaymentWrites {
             return new Claim.AlreadyDone(payment);
         }
         if (status == action.inFlight) {
+            // The JVM's clock, unlike the key store's lease checks, which use Postgres's now().
+            // Skew between the two only moves when a re-drive is allowed: @Version still lets one
+            // claim win, and the acquirer's capture and void are idempotent on the authorization id.
             if (payment.getTransitionStartedAt().isAfter(Instant.now().minus(staleAfter))) {
                 throw ApiException.inProgress(action.verb + " in progress");
             }

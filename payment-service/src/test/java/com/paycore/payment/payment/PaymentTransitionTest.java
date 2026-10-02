@@ -5,6 +5,7 @@ import com.paycore.payment.support.Tokens;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.test.web.servlet.ResultActions;
 
 import java.util.List;
@@ -22,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -171,6 +173,24 @@ class PaymentTransitionTest extends PaymentServiceTest {
 
         voidIt(id).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("VOIDED"));
         assertThat(acquirer.voidCalls()).isEqualTo(2);
+    }
+
+    /**
+     * The acquirer captured, and recording it failed. Like a capture it did not answer: 502, the
+     * payment left CAPTURING for the stale re-drive, never a bare 500.
+     */
+    @Test
+    void aCaptureWhoseOutcomeFailsToRecordIsABadGatewayAndStaysInFlight() throws Exception {
+        String id = authorized();
+        doThrow(new DataAccessResourceFailureException("db down"))
+                .when(paymentWrites).completeTransition(any(UUID.class), any(TransitionAction.class));
+
+        capture(id).andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.detail").value("acquirer outcome unknown; retry the capture"))
+                .andExpect(jsonPath("$.paymentId").doesNotExist());
+        assertThat(acquirer.captureCalls()).isEqualTo(1);
+        mockMvc.perform(get("/payments/{id}", id).with(Tokens.reader("acme")))
+                .andExpect(jsonPath("$.status").value("CAPTURING"));
     }
 
     /**

@@ -158,6 +158,17 @@ class AcquirerClientTest {
         }
     }
 
+    /** An approval with no authorization id could never be captured or voided. */
+    @Test
+    void anApprovalWithoutAnAuthorizationIdIsNoAnswer() {
+        try (Stub noId = respondingWith(200, "{\"status\":\"APPROVED\"}")) {
+            AcquirerClient broken = clientFor(noId.baseUrl());
+
+            assertThat(broken.authorize(UUID.randomUUID(), 1999, "USD", "tok_approve"))
+                    .isInstanceOf(AuthorizeOutcome.NoAnswer.class);
+        }
+    }
+
     @Test
     void anUnrecognisedStatusIsNoAnswer() {
         try (Stub pending = respondingWith(200, "{\"authorizationId\":\"auth_x\",\"status\":\"PENDING_REVIEW\"}")) {

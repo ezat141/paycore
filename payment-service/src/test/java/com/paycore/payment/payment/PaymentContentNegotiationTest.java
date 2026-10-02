@@ -44,6 +44,19 @@ class PaymentContentNegotiationTest extends PaymentServiceTest {
                 .andExpect(jsonPath("$.status").exists());
     }
 
+    /** A body that isn't JSON is 415 in the platform shape, and never reaches the acquirer. */
+    @Test
+    void aNonJsonContentTypeIsUnsupportedMediaType() throws Exception {
+        mockMvc.perform(Requests.createPayment(Tokens.writer("acme"), "order-1", body(1999, "tok_approve"))
+                        .contentType(MediaType.TEXT_PLAIN))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.error").value("unsupported_media_type"))
+                .andExpect(jsonPath("$.status").value(415));
+
+        assertThat(acquirer.totalAuthorizeCalls()).isZero();
+        assertThat(paymentCount()).isZero();
+    }
+
     /** Regression guard: the produces declaration must not change the no-Accept-header path. */
     @Test
     void aTimeoutWithNoAcceptHeaderStillAnswersBadGatewayWithThePaymentId() throws Exception {

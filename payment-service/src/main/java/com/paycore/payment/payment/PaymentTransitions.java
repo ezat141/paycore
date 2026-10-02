@@ -69,6 +69,16 @@ public class PaymentTransitions {
             // and void are idempotent on the authorization id.
             throw ApiException.badGateway("acquirer outcome unknown; retry the " + action.verb, null);
         }
-        return PaymentResponse.from(writes.completeTransition(claimed.getId(), action));
+        try {
+            return PaymentResponse.from(writes.completeTransition(claimed.getId(), action));
+        } catch (OptimisticLockingFailureException concurrentCompletion) {
+            throw concurrentCompletion;   // another request completed it: 409, and its retry returns 200
+        } catch (RuntimeException e) {
+            // The acquirer did it, and recording that failed. To the client that is no answer, as
+            // on authorize: the payment stays CAPTURING/VOIDING, and once the claim goes stale a
+            // retry re-drives it, which the acquirer's idempotent capture and void make safe.
+            log.error("could not record the acquirer's {} of payment {}", action.verb, claimed.getId(), e);
+            throw ApiException.badGateway("acquirer outcome unknown; retry the " + action.verb, null);
+        }
     }
 }
