@@ -20,8 +20,11 @@ import java.util.stream.Collectors;
  * must not write: the scope is the client's ceiling, the permission is the user's right.
  *
  * <p>The tenant check comes second so a token lacking everything is told about permissions
- * first. A token with no tenant — every client-credentials token today — is refused with its
- * own reason, because no amount of extra scope supplies a claim the token structurally lacks.
+ * first. That includes every client-credentials token today: AuthCore adds {@code tenant},
+ * {@code roles} and {@code permissions} together or not at all, so such a token carries no
+ * permissions and is refused for that. The tenant check is defence in depth, for a token that
+ * carries permissions but no tenant; it is refused with its own reason, because no amount of
+ * extra scope supplies a claim the token structurally lacks.
  */
 public final class PaymentsAuthorization implements AuthorizationManager<RequestAuthorizationContext> {
 

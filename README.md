@@ -46,7 +46,7 @@ payment-service verifies AuthCore's JWTs itself, against the published JWKS, and
 1. the client's scope **and** the user's permission (`SCOPE_payments:write` and `payments:write`, say). The scope is what the client application was granted, the permission is what the user may do, and both are required. A `permissions` entry named like `SCOPE_…` or `ROLE_…` is ignored, so it cannot stand in for either;
 2. then a tenant: the `tenant` claim must be a non-blank string. A list or a blank string counts as no tenant.
 
-All of it runs before the body is read. A missing scope or permission is `403` `"insufficient permission"`; a missing tenant is `403` `"token carries no tenant"`, a separate message because no amount of extra scope supplies a claim the token lacks. A route with no rule is `403` `"no such operation"`, even with a full token. Only `/actuator/health` is public.
+All of it runs before the body is read. A missing scope or permission is `403` `"insufficient permission"`. That is what a client-credentials token gets: AuthCore adds `tenant`, `roles` and `permissions` together or not at all, so such a token carries no permissions and never reaches the tenant check. The tenant check is defence in depth, for a token that carries permissions but no tenant: `403` `"token carries no tenant"`, a separate message because no amount of extra scope supplies a claim the token lacks. A route with no rule is `403` `"no such operation"`, even with a full token. Only `/actuator/health` is public.
 
 ---
 
@@ -128,17 +128,19 @@ An unknown field is `400` `"unknown field: <name>"`, so a misspelt field can't b
 
 A decline is `201`: the payment exists and the network gave a definite answer, carried in `status` and `declineCode`.
 
-Every mapping produces `application/json`. A request whose `Accept` excludes JSON is `406` before its handler runs, so a create never reaches the acquirer. Every error has the platform's shape, `{"error", "status", "path", "detail"}`, and is always rendered as JSON. `detail` is always text PayCore wrote, never an exception's message.
+Every mapping produces `application/json`. A request whose `Accept` excludes JSON is `406` before its handler runs, so a create never reaches the acquirer. Every error has the platform's shape, `{"error", "status", "path", "detail"}`, and is always rendered as JSON. That includes failures raised inside the security filters, before any controller runs, such as AuthCore's JWKS being unreachable or a path the firewall rejects: `JsonErrorController` replaces Boot's default `/error` body. `detail` is always text PayCore wrote, never an exception's message.
 
 | Status | When | `detail` |
 |---|---|---|
-| `400` | malformed or invalid body, bad header, bad `limit` | `"malformed request body"`, `"unknown field: …"`, `"<field>: <rule>"`, `"Idempotency-Key header is required"`, `"limit must be between 1 and 100"`, … |
+| `400` | malformed or invalid body, bad header, bad `limit` or id, a path the firewall rejects | `"malformed request body"`, `"unknown field: …"`, `"<field>: <rule>"`, `"Idempotency-Key header is required"`, `"limit must be between 1 and 100"`, `"malformed id"`, `"malformed limit"`, … |
 | `401` | no token, or one that fails verification. `WWW-Authenticate: Bearer` | none |
 | `403` | see [Platform](#platform). No `WWW-Authenticate` | `"insufficient permission"`, `"token carries no tenant"`, `"no such operation"` |
 | `404` | no such payment **in your tenant** | `"no such payment"` |
 | `406` | `Accept` excludes `application/json` | none |
 | `409` | key or transition in progress (`Retry-After: 1`), invalid transition, lost race | `"a request with this Idempotency-Key is in progress"`, `"capture in progress"`, `"cannot void a payment that is CAPTURED"`, `"payment was modified concurrently; retry"` |
+| `415` | a body whose `Content-Type` isn't JSON | none |
 | `422` | key reused with a different request | `"Idempotency-Key was already used with a different request"` |
+| `500` | an unexpected failure, AuthCore's JWKS unreachable included | none |
 | `502` | the acquirer gave no definite answer, or refused | [see below](#when-the-acquirer-does-not-say-yes-or-no) |
 
 ---
@@ -410,7 +412,7 @@ Exactly one concurrent retry updates the row, and the rest get `409`. The winner
 |---|---|---|
 | **No definite answer**: a timeout at any point in the exchange (after the headers arrive, too), a refused connection, a `5xx`, or an unreadable body. On authorize, a missing or unrecognised `status` as well | Payment → `UNKNOWN`. `502` `"acquirer outcome unknown; retry with the same Idempotency-Key"` + `paymentId`. Lease released, so a retry re-drives | Payment stays `CAPTURING`/`VOIDING`, never reverted, since it may have happened. `502` `"acquirer outcome unknown; retry the capture"` (or `void`) |
 | **The acquirer refused** (`4xx`) | Status left unchanged (`PENDING`, or `UNKNOWN` on a re-drive). `502` `"acquirer refused the authorization; the payment needs reconciliation"` + `paymentId`. Lease released | Payment stays `CAPTURING`/`VOIDING`. `502` `"acquirer refused the capture; the payment needs reconciliation"` (or `void`) |
-| **It answered, but recording the answer failed** | `502` `"acquirer outcome unknown; retry with the same Idempotency-Key"` + `paymentId`. The payment keeps its status, and a retry re-drives it under the same reference | — |
+| **It answered, but recording the answer failed** | `502` `"acquirer outcome unknown; retry with the same Idempotency-Key"` + `paymentId`. The payment keeps its status, and a retry re-drives it under the same reference | Payment stays `CAPTURING`/`VOIDING`. `502` `"acquirer outcome unknown; retry the capture"` (or `void`). A retry after 30 s re-drives it |
 
 A refusal is not `UNKNOWN`. `UNKNOWN` promises that a retry resolves the payment, and after a refusal none will: the acquirer's record and PayCore's disagree, and only reconciliation (M5) can settle that. [Known limitations](#known-limitations) has the consequences.
 
@@ -447,7 +449,7 @@ On the current source:
 | Module | Tests |
 |---|---|
 | acquirer-simulator | 24 |
-| payment-service | 220 |
+| payment-service | 226 |
 
 Both modules report `Failures: 0, Errors: 0, Skipped: 0`. payment-service's count includes 64 parameterized cases from `PaymentStatusTest`, one for every ordered pair of the eight statuses.
 
@@ -462,20 +464,23 @@ The integration tests run against real PostgreSQL 16 and Redis 7 in Testcontaine
 | A `502` is never the stored answer | `IdempotencyTest`: after a timeout the key is still `IN_PROGRESS`, with no stored response and its lease released |
 | Tenant isolation | `IdempotencyTest`: the same key in two tenants → two payments, each replaying its own. `PaymentCreationTest`, `PaymentTransitionTest`: another tenant's payment is `404` to read, capture and void |
 | Capture and void cannot both win | `PaymentTransitionTest`: a barrier holds both requests until each has loaded the same version, and the loser's `409` detail shows `@Version` decided it; plus a free-running race repeated 10 times |
-| Authorization before parsing | `SecurityBoundaryTest`: an unauthorized token with an invalid body → `403`, not `400`; the same for a token with no tenant |
+| Authorization before parsing | `SecurityBoundaryTest`: an unauthorized token with an invalid body → `403`, not `400`; the same for a token with no tenant. A client-credentials-shaped token (scopes only) → `403` `"insufficient permission"` |
+| Every error is JSON, even before MVC | `FilterErrorShapeTest`: a real server on a random port. An unreachable JWKS → `500`, a firewall rejection → `400`, both in the platform shape, not Boot's default body |
 | The token is really verified | `RealTokenTest`: real RS256 tokens against a JWKS served locally. A wrong issuer, an expired token, a token signed by another key and a malformed bearer value are each `401` |
-| Nothing charges a card it can't answer | `PaymentContentNegotiationTest`: `Accept: text/plain` → `406`, no payment, no acquirer call |
+| Nothing charges a card it can't answer | `PaymentContentNegotiationTest`: `Accept: text/plain` → `406`, and a `text/plain` body → `415`, each with no payment and no acquirer call |
+| A recording failure is never a bare `500` | `IdempotencyTest` on create, `PaymentTransitionTest` on capture: `502`, and the payment left where a retry re-drives it |
 | The schema is real | `PaymentPersistenceTest`: the CHECK constraints refuse a bad amount, currency and status directly in PostgreSQL |
 
 ---
 
 ## Known limitations
 
-- **Client-credentials tokens can't create payments.** They carry no `tenant` claim, and real merchants integrate server-to-server, so this is the most significant gap. M7 adds a tenant-bound machine client to AuthCore.
-- **`UNKNOWN` payments resolve only when the client retries.** A client that never retries leaves the payment `UNKNOWN`. M5 adds reconciliation against the acquirer.
+- **Client-credentials tokens can't create payments.** They carry no `tenant` claim and no permissions, and get `403` `"insufficient permission"`. Real merchants integrate server-to-server, so this is the most significant gap. M7 adds a tenant-bound machine client to AuthCore.
+- **`UNKNOWN` or `PENDING` payments resolve only when the client retries.** A client that never retries leaves the payment `UNKNOWN`, or `PENDING` if the outcome failed to record or the process crashed mid-request. M5 adds reconciliation against the acquirer.
 - **No resilience around the acquirer** beyond timeouts: no retry, circuit breaker or bulkhead (M5).
 - **A capture or void the acquirer refuses (`4xx`) leaves the payment `CAPTURING` or `VOIDING`.** A retry within 30 s gets `409` `"capture in progress"` (or `"void in progress"`). Every retry after that gets the same `502` "needs reconciliation" until M5's reconciliation resolves it. Locally, the realistic way to hit this is restarting the in-memory simulator, which then no longer knows the authorization.
 - **An authorization the acquirer refuses (`4xx`) leaves the payment's status unchanged**: `PENDING` on a first attempt, `UNKNOWN` on a re-drive. The key's lease is released, so every retry with the same key re-drives and gets the same `502` until M5's reconciliation resolves it.
+- **A capture or void whose outcome fails to record leaves the payment `CAPTURING` or `VOIDING`.** The acquirer did it, but recording it failed, so the answer is `502` and nothing completes the payment until a retry after the 30 s window re-drives it.
 - **The Postgres lease has no owner fence.** A request that stalls past its 30 s lease, far above the acquirer's timeouts, can release or complete a key that a later request has since claimed. The cost is at most extra acquirer calls and a `502`, never a double charge: every attempt sends the same payment id as the acquirer's reference, and the acquirer deduplicates on it.
 - **A stale Redis lock can delay a re-drive or a replay by up to 30 s (lock-ttl).** An `IN_PROGRESS` lock left behind by a crashed request, or by a release or completion that never reached Redis, answers every retry with a retryable `409` until it expires, even where Postgres would already allow a re-drive or replay. A release or completion is lost when its command times out, during a Redis pause for example. It never causes a double charge or a wrong answer; the retry succeeds once the lock lapses.
 - **Idempotency rows are never purged.** Redis entries expire after 24 hours, but the Postgres rows remain and keep replaying.

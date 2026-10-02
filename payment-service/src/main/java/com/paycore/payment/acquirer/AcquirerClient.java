@@ -19,8 +19,9 @@ import java.util.UUID;
  * <p>Any failure to obtain a definite, well-formed answer becomes {@code NoAnswer}: a timeout at
  * any point in the exchange (including one that lands after the headers arrive, since the read
  * timeout is a deadline on the whole exchange), a refused connection, a 5xx, or a body we cannot
- * read or do not recognise (truncated or malformed JSON, a missing or unrecognised status). A 4xx
- * is different: the acquirer answered, and refused. It is left to throw as
+ * read or do not recognise (truncated or malformed JSON, a missing or unrecognised status, an
+ * authorization answer without an authorization id). A 4xx is different: the acquirer
+ * answered, and refused. It is left to throw as
  * {@code HttpClientErrorException}, and callers map it to a 502 "needs reconciliation".
  */
 @Component
@@ -68,7 +69,9 @@ public class AcquirerClient {
             log.warn("acquirer gave no answer for payment {}: {}", reference, noAnswer.getMessage());
             return new AuthorizeOutcome.NoAnswer();
         }
-        if (reply == null || reply.status() == null) {
+        // Without an authorization id a definite answer is useless: nothing could be captured or
+        // voided later. Treat it as the malformed reply it is, the same as a missing status.
+        if (reply == null || reply.status() == null || reply.authorizationId() == null) {
             log.warn("acquirer returned an unreadable reply for payment {}", reference);
             return new AuthorizeOutcome.NoAnswer();
         }
