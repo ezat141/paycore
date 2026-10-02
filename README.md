@@ -294,7 +294,7 @@ The same command again returns `HTTP/1.1 200` and the identical body, `updatedAt
 ### 7. List
 
 ```bash
-curl -si http://localhost:8083/payments -H "Authorization: Bearer $TOKEN"
+curl -si "http://localhost:8083/payments?limit=5" -H "Authorization: Bearer $TOKEN"
 ```
 
 ```
@@ -344,7 +344,9 @@ Content-Type: application/json;charset=UTF-8
 
 ### 9. A decline
 
-A new key with `"cardToken":"tok_decline_funds"`:
+```bash
+curl -si http://localhost:8083/payments -H "Authorization: Bearer $TOKEN" -H "Idempotency-Key: order-1003" -H "Content-Type: application/json" -d '{"amount":1999,"currency":"USD","cardToken":"tok_decline_funds"}'
+```
 
 ```
 HTTP/1.1 201
