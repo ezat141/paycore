@@ -4,6 +4,7 @@ import com.paycore.payment.acquirer.AuthorizeOutcome;
 import com.paycore.payment.error.ApiException;
 import com.paycore.payment.idempotency.IdempotencyKeyStore;
 import com.paycore.payment.idempotency.KeyRecord;
+import com.paycore.payment.outbox.PaymentEvents;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,11 +34,13 @@ public class PaymentWrites {
     private final PaymentRepository payments;
     private final IdempotencyKeyStore keys;
     private final ObjectMapper json;
+    private final PaymentEvents events;
 
-    public PaymentWrites(PaymentRepository payments, IdempotencyKeyStore keys, ObjectMapper json) {
+    public PaymentWrites(PaymentRepository payments, IdempotencyKeyStore keys, ObjectMapper json, PaymentEvents events) {
         this.payments = payments;
         this.keys = keys;
         this.json = json;
+        this.events = events;
     }
 
     /**
@@ -50,8 +53,10 @@ public class PaymentWrites {
         if (!keys.insertIfAbsent(tenant, idempotencyKey, fingerprint, id, lease)) {
             return new Start.Existing(keys.find(tenant, idempotencyKey).orElseThrow());
         }
-        return new Start.Created(payments.save(Payment.pending(id, tenant, request.amount(),
-                request.currency(), request.cardToken(), request.description())));
+        Payment payment = payments.save(Payment.pending(id, tenant, request.amount(),
+                request.currency(), request.cardToken(), request.description()));
+        events.statusChanged(payment, null);
+        return new Start.Created(payment);
     }
 
     /**
@@ -62,11 +67,13 @@ public class PaymentWrites {
     @Transactional
     public Payment recordAuthorizeOutcome(String tenant, String idempotencyKey, UUID paymentId, AuthorizeOutcome outcome) {
         Payment payment = payments.findById(paymentId).orElseThrow();
+        PaymentStatus before = payment.getStatus();
         switch (outcome) {
             case AuthorizeOutcome.Approved approved -> payment.authorize(approved.authorizationId());
             case AuthorizeOutcome.Declined declined -> payment.decline(declined.authorizationId(), declined.declineCode());
             case AuthorizeOutcome.NoAnswer noAnswer -> payment.markUnknown();
         }
+        events.statusChanged(payment, before);
         if (payment.getStatus() == PaymentStatus.UNKNOWN) {
             keys.release(tenant, idempotencyKey);
         } else {
@@ -109,6 +116,7 @@ public class PaymentWrites {
         }
         if (status == PaymentStatus.AUTHORIZED) {
             payment.beginTransition(action.inFlight);
+            events.statusChanged(payment, PaymentStatus.AUTHORIZED);
             return new Claim.Claimed(payment);
         }
         throw ApiException.conflict("cannot " + action.verb + " a payment that is " + status);
@@ -120,7 +128,9 @@ public class PaymentWrites {
         // Sequential completions find it done; truly concurrent ones lose on @Version and get a
         // 409 whose retry returns 200.
         if (payment.getStatus() != action.done) {
+            PaymentStatus before = payment.getStatus();
             payment.completeTransition(action.done);
+            events.statusChanged(payment, before);
         }
         return payment;
     }
