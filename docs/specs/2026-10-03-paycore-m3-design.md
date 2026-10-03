@@ -198,7 +198,8 @@ such guarantee.
 ### 5.2 Trade-off: the relay's transaction spans the send
 
 The claiming transaction stays open while its batch is in flight to Kafka. It is bounded by the
-producer's delivery timeout of about 10 s. The alternative (claim with a lease in one transaction,
+producer's `max.block.ms` (5 s) plus its delivery timeout (10 s), about 15 s, which the
+relay's `send-timeout` covers. The alternative (claim with a lease in one transaction,
 send, mark in another) needs lease expiry and recovery logic. That is the same complexity the
 idempotency lease already carries, and a background relay does not need it.
 
@@ -399,7 +400,7 @@ are verified against Maven Central when planning.
 - **History is eventually consistent.** A just-created payment can return `404` or partial history
   for up to the relay interval plus consumer lag.
 - **Gaps in a payment's history cannot be detected,** because `version` is not contiguous.
-- **The relay's transaction spans a Kafka send,** bounded by the producer delivery timeout (§5.2).
+- **The relay's transaction spans a Kafka send,** bounded by `max.block.ms` plus the producer delivery timeout, about 15 s (§5.2).
 - **A database outage on history-service blocks the affected partitions** until it recovers, by
   design (§6.4).
 - **The DLT has no consumer or replay tooling.** Records sent there need manual handling.
