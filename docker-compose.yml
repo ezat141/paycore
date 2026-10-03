@@ -65,6 +65,7 @@ services:
       interval: 5s
       timeout: 10s
       retries: 10
+      start_period: 20s   # the broker's first seconds don't count against retries
 
 volumes:
   postgres_data:
