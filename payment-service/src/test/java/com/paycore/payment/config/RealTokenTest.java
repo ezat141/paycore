@@ -46,7 +46,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * base class points {@code jwk-set-uri} at an address nothing answers, which is exactly wrong
  * here.
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+        "paycore.outbox.relay-enabled=false",
+        "spring.kafka.admin.auto-create=false"})
 @AutoConfigureMockMvc
 @Import(PostgresContainerConfiguration.class)
 class RealTokenTest {

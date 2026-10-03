@@ -41,7 +41,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://localhost:9999/jwks",
         "paycore.acquirer.read-timeout=1s",
         "spring.data.redis.host=127.0.0.1",
-        "spring.data.redis.port=1"})
+        "spring.data.redis.port=1",
+        "paycore.outbox.relay-enabled=false",
+        "spring.kafka.admin.auto-create=false"})
 @AutoConfigureMockMvc
 @Import(PostgresContainerConfiguration.class)
 class RedisDownTest {

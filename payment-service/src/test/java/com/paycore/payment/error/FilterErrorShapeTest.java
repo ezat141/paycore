@@ -33,7 +33,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         // Nothing listens here: verifying any token needs AuthCore's keys and cannot get them.
-        "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://127.0.0.1:1/jwks"})
+        "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://127.0.0.1:1/jwks",
+        "paycore.outbox.relay-enabled=false",
+        "spring.kafka.admin.auto-create=false"})
 @Import(PostgresContainerConfiguration.class)
 class FilterErrorShapeTest {
 
