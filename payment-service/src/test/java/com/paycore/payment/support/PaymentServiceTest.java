@@ -1,5 +1,6 @@
 package com.paycore.payment.support;
 
+import com.paycore.payment.idempotency.IdempotencyKeyStore;
 import com.paycore.payment.payment.PaymentRepository;
 import com.paycore.payment.payment.PaymentStatus;
 import com.paycore.payment.payment.PaymentWrites;
@@ -17,11 +18,14 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.sql.Types;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -47,6 +51,8 @@ import java.util.UUID;
 public abstract class PaymentServiceTest {
 
     protected static final FakeAcquirer acquirer = FakeAcquirer.start();
+
+    private static final JsonMapper EVENT_JSON = JsonMapper.builder().build();
 
     @DynamicPropertySource
     static void acquirerLocation(DynamicPropertyRegistry registry) {
@@ -75,9 +81,12 @@ public abstract class PaymentServiceTest {
     @MockitoSpyBean
     protected PaymentWrites paymentWrites;
 
+    @MockitoSpyBean
+    protected IdempotencyKeyStore idempotencyKeyStore;
+
     @BeforeEach
     void resetState() {
-        jdbc.sql("TRUNCATE idempotency_keys, payments").update();
+        jdbc.sql("TRUNCATE outbox_events, idempotency_keys, payments").update();
         acquirer.reset();
         redis.execute((RedisCallback<Void>) connection -> {
             connection.serverCommands().flushAll();
@@ -91,6 +100,25 @@ public abstract class PaymentServiceTest {
 
     protected long paymentCount() {
         return jdbc.sql("SELECT count(*) FROM payments").query(Long.class).single();
+    }
+
+    /** The outbox payloads for one payment, in the order the relay will send them. */
+    @SuppressWarnings("unchecked")
+    protected List<Map<String, Object>> outboxEvents(String paymentId) {
+        return jdbc.sql("SELECT payload::text FROM outbox_events WHERE aggregate_id = :id ORDER BY seq")
+                .param("id", UUID.fromString(paymentId))
+                .query(String.class).list().stream()
+                .map(text -> (Map<String, Object>) EVENT_JSON.readValue(text, Map.class))
+                .toList();
+    }
+
+    protected long outboxCount() {
+        return jdbc.sql("SELECT count(*) FROM outbox_events").query(Long.class).single();
+    }
+
+    protected long storedVersion(String paymentId) {
+        return jdbc.sql("SELECT version FROM payments WHERE id = :id")
+                .param("id", UUID.fromString(paymentId)).query(Long.class).single();
     }
 
     /** Inserts a payment directly, for states and timestamps the API cannot produce on demand. */
