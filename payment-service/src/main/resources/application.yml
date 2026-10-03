@@ -36,6 +36,21 @@ spring:
       port: 6380
       timeout: 200ms            # an unreachable Redis costs at most this per call (spec §7.3)
       connect-timeout: 200ms
+  kafka:
+    bootstrap-servers: localhost:9094   # PayCore's compose Kafka (9092 is AuthCore's)
+    producer:
+      acks: all                         # wait for all in-sync replicas (spec §5.3)
+      properties:
+        enable.idempotence: true        # no duplicates from producer retries; order kept per partition
+        max.block.ms: 5000              # a send against an unreachable broker fails in seconds, not 60 s
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 10000      # plus max.block.ms, bounds how long a relay pass holds its transaction (spec §5.2)
+    admin:
+      # With Kafka down at startup, creating the topic would otherwise hold startup for about 40 s
+      # (a 30 s operation timeout, then a 10 s close), with the payment API unavailable. After this
+      # timeout startup goes on without the topic; the relay's sends fail until it exists (spec §10).
+      operation-timeout: 5s
+      close-timeout: 2s
 
 management:
   endpoints:
@@ -56,3 +71,10 @@ paycore:
   idempotency:
     lock-ttl: 30s      # the lease on a key while a request runs; far above the acquirer read timeout
     response-ttl: 24h  # how long Redis keeps a completed response; Postgres keeps it indefinitely
+  outbox:
+    relay-enabled: true
+    poll-interval-ms: 500
+    batch-size: 100
+    send-timeout: 15s     # how long a pass waits for one acknowledgement; covers max.block.ms + delivery.timeout.ms
+    topic-partitions: 3
+    topic-replicas: 1     # one local broker; production needs 3, with min.insync.replicas=2 (spec §5.4)

@@ -1,6 +1,7 @@
 package com.paycore.payment.support;
 
 import com.paycore.payment.idempotency.IdempotencyKeyStore;
+import com.paycore.payment.outbox.EventPublisher;
 import com.paycore.payment.payment.PaymentRepository;
 import com.paycore.payment.payment.PaymentStatus;
 import com.paycore.payment.payment.PaymentWrites;
@@ -45,9 +46,15 @@ import java.util.UUID;
         "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://localhost:9999/jwks",
         "paycore.acquirer.read-timeout=1s",
         "spring.data.redis.timeout=2s",
-        "spring.data.redis.connect-timeout=2s"})
+        "spring.data.redis.connect-timeout=2s",
+        "paycore.outbox.relay-enabled=false",
+        "spring.kafka.producer.properties.max.block.ms=2000",
+        "spring.kafka.producer.properties.request.timeout.ms=2000",
+        "spring.kafka.producer.properties.delivery.timeout.ms=4000",
+        "paycore.outbox.send-timeout=6s"})
 @AutoConfigureMockMvc
-@Import({PostgresContainerConfiguration.class, RedisContainerConfiguration.class})
+@Import({PostgresContainerConfiguration.class, RedisContainerConfiguration.class,
+        KafkaContainerConfiguration.class})
 public abstract class PaymentServiceTest {
 
     protected static final FakeAcquirer acquirer = FakeAcquirer.start();
@@ -83,6 +90,9 @@ public abstract class PaymentServiceTest {
 
     @MockitoSpyBean
     protected IdempotencyKeyStore idempotencyKeyStore;
+
+    @MockitoSpyBean
+    protected EventPublisher eventPublisher;
 
     @BeforeEach
     void resetState() {
