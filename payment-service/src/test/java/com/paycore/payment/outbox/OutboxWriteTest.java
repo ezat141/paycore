@@ -7,6 +7,8 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.redis.RedisConnectionFailureException;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +57,54 @@ class OutboxWriteTest extends PaymentServiceTest {
             assertThat(((Number) e.get("amount")).longValue()).isEqualTo(1999L);
             assertThat(e.get("currency")).isEqualTo("USD");
         });
+        List<Instant> occurred = events.stream().map(e -> Instant.parse((String) e.get("occurredAt"))).toList();
+        assertThat(occurred).isSorted();
+        assertThat(occurred.get(occurred.size() - 1)).isEqualTo(storedUpdatedAt(id));
+        assertThat(jdbc.sql("SELECT DISTINCT event_type FROM outbox_events WHERE aggregate_id = :id")
+                .param("id", UUID.fromString(id)).query(String.class).list())
+                .containsExactly("PaymentStatusChanged");
+    }
+
+    /** I1 on the void path: a void, then a repeated void, write the void chain exactly once. */
+    @Test
+    void voidThenVoidAgainWritesTheVoidEventsOnce() throws Exception {
+        String id = read(create(Tokens.writer("acme"), "order-1", body(1999, "tok_approve"))
+                .andExpect(status().isCreated()), "$.id");
+
+        voidPayment(id).andExpect(status().isOk());
+        voidPayment(id).andExpect(status().isOk());
+
+        List<Map<String, Object>> events = outboxEvents(id);
+        assertThat(events).extracting(e -> e.get("toStatus"))
+                .containsExactly("PENDING", "AUTHORIZED", "VOIDING", "VOIDED");
+        assertThat(events).extracting(e -> e.get("fromStatus"))
+                .containsExactly(null, "PENDING", "AUTHORIZED", "VOIDING");
+        assertThat(lastVersion(id)).isEqualTo(storedVersion(id));
+    }
+
+    /** A decline's event carries the acquirer's decline code. */
+    @Test
+    void aDeclineCarriesItsDeclineCode() throws Exception {
+        String id = read(create(Tokens.writer("acme"), "order-1", body(1999, "tok_decline_funds"))
+                .andExpect(status().isCreated()), "$.id");
+
+        List<Map<String, Object>> events = outboxEvents(id);
+        assertThat(events).extracting(e -> e.get("toStatus")).containsExactly("PENDING", "DECLINED");
+        assertThat(events.get(1).get("declineCode")).isEqualTo("insufficient_funds");
+    }
+
+    /** A re-drive that gets an answer moves the payment out of UNKNOWN, and says so. */
+    @Test
+    void aReDriveAfterNoAnswerStartsFromUnknown() throws Exception {
+        String id = read(create(Tokens.writer("acme"), "order-1", body(1999, "tok_timeout"))
+                .andExpect(status().isBadGateway()), "$.paymentId");
+        create(Tokens.writer("acme"), "order-1", body(1999, "tok_timeout")).andExpect(status().isCreated());
+
+        List<Map<String, Object>> events = outboxEvents(id);
+        assertThat(events).extracting(e -> e.get("toStatus"))
+                .containsExactly("PENDING", "UNKNOWN", "AUTHORIZED");
+        assertThat(events).extracting(e -> e.get("fromStatus"))
+                .containsExactly(null, "PENDING", "UNKNOWN");
     }
 
     /** I2: the outcome is recorded, its event written, then the transaction fails: no event survives. */
@@ -145,7 +195,16 @@ class OutboxWriteTest extends PaymentServiceTest {
         return ((Number) events.get(events.size() - 1).get("version")).longValue();
     }
 
+    private Instant storedUpdatedAt(String id) {
+        return jdbc.sql("SELECT updated_at FROM payments WHERE id = :id")
+                .param("id", UUID.fromString(id)).query(OffsetDateTime.class).single().toInstant();
+    }
+
     private org.springframework.test.web.servlet.ResultActions capture(String id) throws Exception {
         return mockMvc.perform(post("/payments/{id}/capture", id).with(Tokens.writer("acme")));
+    }
+
+    private org.springframework.test.web.servlet.ResultActions voidPayment(String id) throws Exception {
+        return mockMvc.perform(post("/payments/{id}/void", id).with(Tokens.writer("acme")));
     }
 }
