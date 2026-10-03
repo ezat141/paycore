@@ -191,7 +191,7 @@ value is always larger. `created_at` (`now()`) is the transaction's start time, 
 such guarantee.
 
 **Settings:**
-- `paycore.outbox.poll-interval` (default `500ms`) and `paycore.outbox.batch-size` (default `100`).
+- `paycore.outbox.poll-interval-ms` (default `500`, a number of milliseconds for `@Scheduled`) and `paycore.outbox.batch-size` (default `100`).
 - `paycore.outbox.relay-enabled` (default `true`). Tests turn the schedule off and run passes on
   demand.
 
@@ -293,8 +293,9 @@ There is no cross-payment ordering, and none is needed.
 | Record cannot be deserialised, or fails validation (unknown status, missing ids, bad currency) | not retried; published to `paycore.payment-events.DLT` | one poison record must not stall its partition |
 | History database unavailable | retried with backoff, **without limit** | the event is valid; sending it to the DLT would lose history. Blocking the partition until Postgres returns is correct and keeps per-payment order. |
 
-Deserialisation errors are caught by an `ErrorHandlingDeserializer`, so they reach the error
-handler instead of looping.
+Records are read as strings and parsed by the service's own `EventParser`, not by a Kafka
+deserializer. A malformed or invalid record therefore becomes one non-retryable
+`InvalidEventException`, which goes to the DLT, instead of a deserialisation loop.
 
 ### 6.5 Read API
 
