@@ -1,0 +1,19 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: history-service
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: jdbc:postgresql://localhost:5434/paycore_history
+    username: paycore
+    password: paycore
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
