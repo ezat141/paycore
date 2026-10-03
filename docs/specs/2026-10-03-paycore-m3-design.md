@@ -403,6 +403,9 @@ are verified against Maven Central when planning.
 - **A database outage on history-service blocks the affected partitions** until it recovers, by
   design (§6.4).
 - **The DLT has no consumer or replay tooling.** Records sent there need manual handling.
+- **If Kafka is unreachable when payment-service starts,** topic creation is skipped after a short
+  timeout, and the relay's sends fail until the topic exists (created by history-service at its
+  start, or by a payment-service restart). Outbox rows are kept and published once it does.
 
 ---
 
