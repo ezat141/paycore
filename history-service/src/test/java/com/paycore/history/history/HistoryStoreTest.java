@@ -34,6 +34,8 @@ class HistoryStoreTest extends HistoryServiceTest {
         store.insertIfAbsent(event(UUID.randomUUID(), payment, "acme", 0, null, "PENDING"));
         store.insertIfAbsent(event(UUID.randomUUID(), payment, "acme", 2, "AUTHORIZED", "CAPTURING"));
         store.insertIfAbsent(event(UUID.randomUUID(), payment, "acme", 1, "PENDING", "AUTHORIZED"));
+        // a second payment of the same tenant must not leak into this one's history
+        store.insertIfAbsent(event(UUID.randomUUID(), UUID.randomUUID(), "acme", 0, null, "PENDING"));
 
         assertThat(store.find("acme", payment)).extracting(HistoryEntry::version).containsExactly(0L, 1L, 2L, 3L);
     }
@@ -45,6 +47,17 @@ class HistoryStoreTest extends HistoryServiceTest {
         store.insertIfAbsent(event(UUID.randomUUID(), payment, "acme", 0, null, "PENDING"));
 
         assertThat(store.find("globex", payment)).isEmpty();
+    }
+
+    /** Every field the read API returns survives the round trip, including decline code and microseconds. */
+    @Test
+    void aStoredEventReadsBackWhatWasWritten() {
+        UUID payment = UUID.randomUUID();
+        store.insertIfAbsent(new PaymentStatusChanged(UUID.randomUUID(), payment, "acme", 1, "PENDING", "DECLINED",
+                1999L, "USD", "insufficient_funds", AT));
+
+        assertThat(store.find("acme", payment))
+                .containsExactly(new HistoryEntry(1, "PENDING", "DECLINED", "insufficient_funds", AT));
     }
 
     private static PaymentStatusChanged event(UUID eventId, UUID paymentId, String tenant, long version,
