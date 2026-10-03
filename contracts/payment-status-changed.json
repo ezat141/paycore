@@ -1,0 +1,12 @@
+{
+  "eventId": "6f0d1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b",
+  "paymentId": "b8cfac3f-e559-4c9e-838a-561a20e2c9b2",
+  "tenant": "acme",
+  "version": 3,
+  "fromStatus": "AUTHORIZED",
+  "toStatus": "CAPTURING",
+  "amount": 1999,
+  "currency": "USD",
+  "declineCode": null,
+  "occurredAt": "2026-10-03T10:15:30.123456Z"
+}
