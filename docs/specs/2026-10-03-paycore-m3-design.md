@@ -292,6 +292,7 @@ There is no cross-payment ordering, and none is needed.
 | Failure | Handling | Why |
 |---|---|---|
 | Record cannot be deserialised, or fails validation (unknown status, missing ids, bad currency) | not retried; published to `paycore.payment-events.DLT` | one poison record must not stall its partition |
+| Record conflicts with stored history: a different event id for a version already stored, or a value too long for its column (any `DataIntegrityViolationException`) | not retried; published to the DLT | permanent: retrying can never succeed, and blocking would stall every payment on the partition. A correct producer never emits one, since each version is written once. It signals divergence, for example a payments database restored from a backup, and the DLT keeps it visible for a person to inspect. The history keeps the first event stored for that version. |
 | History database unavailable | retried with backoff, **without limit** | the event is valid; sending it to the DLT would lose history. Blocking the partition until Postgres returns is correct and keeps per-payment order. |
 
 Records are read as strings and parsed by the service's own `EventParser`, not by a Kafka
