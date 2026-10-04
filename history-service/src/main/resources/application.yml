@@ -11,6 +11,24 @@ spring:
     url: jdbc:postgresql://localhost:5434/paycore_history
     username: paycore
     password: paycore
+  kafka:
+    bootstrap-servers: localhost:9094
+    consumer:
+      group-id: history-service
+      auto-offset-reset: earliest     # a new group replays the topic: history can be rebuilt
+      enable-auto-commit: false       # offsets are committed by the container, after the insert
+    listener:
+      ack-mode: record                # commit each record's offset after it was stored
+      concurrency: 3                  # the partition count; more would sit idle
+    producer:                         # used only to publish poison records to the DLT
+      acks: all
+      properties:
+        enable.idempotence: true
+
+paycore:
+  history:
+    topic-partitions: 3
+    topic-replicas: 1
 
 management:
   endpoints:

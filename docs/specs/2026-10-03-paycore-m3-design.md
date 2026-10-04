@@ -292,6 +292,7 @@ There is no cross-payment ordering, and none is needed.
 | Failure | Handling | Why |
 |---|---|---|
 | Record cannot be deserialised, or fails validation (unknown status, missing ids, bad currency) | not retried; published to `paycore.payment-events.DLT` | one poison record must not stall its partition |
+| Record conflicts with stored history: a different event id for a version already stored, or a value too long for its column (any `DataIntegrityViolationException`) | not retried; published to the DLT | permanent: retrying can never succeed, and blocking would stall every payment on the partition. A correct producer never emits one, since each version is written once. It signals divergence, for example a payments database restored from a backup, and the DLT keeps it visible for a person to inspect. The history keeps the first event stored for that version. |
 | History database unavailable | retried with backoff, **without limit** | the event is valid; sending it to the DLT would lose history. Blocking the partition until Postgres returns is correct and keeps per-payment order. |
 
 Records are read as strings and parsed by the service's own `EventParser`, not by a Kafka
@@ -404,6 +405,13 @@ are verified against Maven Central when planning.
 - **A database outage on history-service blocks the affected partitions** until it recovers, by
   design (§6.4).
 - **The DLT has no consumer or replay tooling.** Records sent there need manual handling.
+- **Two copies of one event stored at the same moment can dead-letter the second.** This happens,
+  for example, with a zombie consumer after a rebalance. The second insert can hit
+  `UNIQUE (payment_id, version)` before `ON CONFLICT (event_id)` sees the first. History stays
+  correct, but the DLT shows a conflict that is not one.
+- **history-service sets no JDBC socket timeout in production.** A database that hangs, rather than
+  refusing connections, blocks the consumer thread. After `max.poll.interval.ms` the group
+  rebalances and the partition moves to another consumer. Nothing is lost.
 - **If Kafka is unreachable when payment-service starts,** topic creation is skipped after a short
   timeout, and the relay's sends fail until the topic exists (created by history-service at its
   start, or by a payment-service restart). Outbox rows are kept and published once it does.
