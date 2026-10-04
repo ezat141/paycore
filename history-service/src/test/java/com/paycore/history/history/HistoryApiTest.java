@@ -49,8 +49,21 @@ class HistoryApiTest extends HistoryServiceTest {
 
     @Test
     void aPaymentWithNoHistoryIsNotFound() throws Exception {
+        // Same body as another tenant's payment: the two must never become an existence oracle.
         mockMvc.perform(get("/payments/{id}/history", UUID.randomUUID()).with(Tokens.reader("acme")))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("no history for this payment"));
+    }
+
+    /** The tenant is the token's, never a header or parameter the caller (or a proxy) can set. */
+    @Test
+    void aTenantHeaderOrParameterCannotOverrideTheToken() throws Exception {
+        UUID payment = seed("acme", 0);
+
+        mockMvc.perform(get("/payments/{id}/history", payment).param("tenant", "acme")
+                        .header("X-GK-Tenant", "acme").with(Tokens.reader("globex")))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("no history for this payment"));
     }
 
     @Test
