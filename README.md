@@ -4,9 +4,11 @@ Card payment processing for the AuthCore / GateKeeper platform: authorize, captu
 
 The hard case is the timeout. The acquirer charges the card, then answers too late; the client sees an error and retries. PayCore never records that payment as failed. It becomes `UNKNOWN`, and the retry, sent with the same `Idempotency-Key`, re-drives the *same* payment under the *same* acquirer reference. The acquirer recognises the reference and returns the charge that already happened. One payment, one authorization. [Steps 4 and 5 of the walkthrough](#4-the-timeout) show it on a live run: the `paymentId` in the `502` comes back as the `id` of an `AUTHORIZED` payment.
 
-**Stack:** Java 21 · Spring Boot 4.1 · Spring Security OAuth2 Resource Server · Spring Data JPA · Flyway · PostgreSQL 16 · Redis 7 · Testcontainers
+Every status change is also published as an event, through a transactional outbox, to Kafka, where a separate history-service stores it once per event and serves each payment's history in version order. [Events and history](#events-and-history) says exactly what that pipeline guarantees and what it does not.
 
-**Scope:** milestones M0–M2: a multi-module repo with a secured payment-service and an acquirer simulator, authorize/capture/void on an explicit state machine, and idempotent creation. Everything after that is in the [Roadmap](#roadmap), and [Known limitations](#known-limitations) says where the line is.
+**Stack:** Java 21 · Spring Boot 4.1 · Spring Security OAuth2 Resource Server · Spring Data JPA · Spring JDBC · Flyway · PostgreSQL 16 · Redis 7 · Apache Kafka 4.2 (KRaft) · Spring Kafka · Testcontainers
+
+**Scope:** milestones M0–M3: a multi-module repo with a secured payment-service, an acquirer simulator and a history-service; authorize/capture/void on an explicit state machine; idempotent creation; a transactional outbox relayed to Kafka at least once; and an idempotent consumer with a dead-letter topic. Everything after that is in the [Roadmap](#roadmap), and [Known limitations](#known-limitations) says where the line is.
 
 ---
 
@@ -19,6 +21,7 @@ The hard case is the timeout. The acquirer charges the card, then answers too la
 - [How idempotency works](#how-idempotency-works)
 - [When the acquirer does not say yes or no](#when-the-acquirer-does-not-say-yes-or-no)
 - [Capture and void](#capture-and-void)
+- [Events and history](#events-and-history)
 - [Testing](#testing)
 - [Known limitations](#known-limitations)
 - [Roadmap](#roadmap)
@@ -34,8 +37,9 @@ The hard case is the timeout. The acquirer charges the card, then answers too la
 | [**ledger-service**](https://github.com/ezat141/ledger-service) `:8082` | Ledger data |
 | **PayCore payment-service** `:8083` (this repo) | Payments, idempotency keys, fine-grained authorization over both |
 | **PayCore acquirer-simulator** `:8091` (this repo) | A stand-in card network |
+| **PayCore history-service** `:8084` (this repo) | Each payment's status history, consumed from Kafka, in its own database |
 
-The two PayCore applications share no code; each builds its own jar.
+The three PayCore applications share no code; each builds its own jar. history-service carries its own copies of payment-service's security and error classes, so the two apply the same rules without a shared library. The event's wire format is pinned by a golden file, [`contracts/payment-status-changed.json`](contracts/payment-status-changed.json), that both services test against.
 
 payment-service verifies AuthCore's JWTs itself, against the published JWKS, and never authorizes on GateKeeper's `X-GK-*` headers. Calling `:8083` directly is exactly as secure as calling it through the gateway. It is not routed through GateKeeper yet (M7).
 
@@ -55,12 +59,13 @@ All of it runs before the body is read. A missing scope or permission is `403` `
 Requires Java 21 and Docker.
 
 ```bash
-docker compose up -d                              # Postgres :5433, Redis :6380
+docker compose up -d                              # Postgres :5433, Redis :6380, history Postgres :5434, Kafka :9094
 ./mvnw -pl acquirer-simulator spring-boot:run     # :8091   (.\mvnw.cmd in PowerShell)
 ./mvnw -pl payment-service spring-boot:run        # :8083
+./mvnw -pl history-service spring-boot:run        # :8084
 ```
 
-The host ports avoid those of AuthCore's compose, so both run side by side. payment-service starts without AuthCore running: the JWT decoder fetches keys on the first request that needs a signature checked, never at startup. Redis is optional too. Its health indicator is disabled, so a missing Redis does not mark the service `DOWN`, and idempotency [falls back to Postgres](#how-idempotency-works).
+The host ports avoid those of AuthCore's compose, so both run side by side. Kafka runs as a single KRaft broker; host clients use `localhost:9094`, and containers on the compose network use `kafka:9092`. Automatic topic creation is off: `paycore.payment-events` (3 partitions) is declared by both services, and its dead-letter topic `paycore.payment-events.DLT` by history-service. payment-service keeps taking payments while Kafka is down; its events wait in the outbox. payment-service starts without AuthCore running: the JWT decoder fetches keys on the first request that needs a signature checked, never at startup. Redis is optional too. Its health indicator is disabled, so a missing Redis does not mark the service `DOWN`, and idempotency [falls back to Postgres](#how-idempotency-works).
 
 The acquirer simulator is deliberately unauthenticated. In production that link is a private, mutually authenticated connection outside the OAuth platform.
 
@@ -112,6 +117,7 @@ It lives 300 seconds (`"expires_in": 300`), so run the walkthrough promptly. Use
 | `GET /payments/{id}` | `payments:read` and a tenant | the payment, within your tenant |
 | `GET /payments?limit=N` | `payments:read` and a tenant | newest first, `1 ≤ limit ≤ 100`, default 20 |
 | `GET /actuator/health` | none | `UP` |
+| `GET :8084/payments/{id}/history` | `payments:read` (scope and permission) and a tenant | the payment's status changes in `version` order; `404` `"no history for this payment"` for another tenant's payment or one with no history yet |
 
 **The create body.** `{"amount": 1999, "currency": "USD", "cardToken": "tok_approve", "description": "Order 1001"}`
 
@@ -366,6 +372,63 @@ HTTP/1.1 201
 }
 ```
 
+### 10. A payment's history
+
+Steps 10 and 11 come from a later live run (M3), with history-service and Kafka running. A new payment, created and captured as in steps 1 and 6:
+
+```bash
+curl -si http://localhost:8083/payments -H "Authorization: Bearer $TOKEN" -H "Idempotency-Key: order-2001" -H "Content-Type: application/json" -d '{"amount":4250,"currency":"EUR","cardToken":"tok_approve","description":"Order 2001"}'
+curl -si -X POST http://localhost:8083/payments/91b92196-5855-4a63-b85c-1d0bb708c7f7/capture -H "Authorization: Bearer $TOKEN"
+```
+
+gave `201` `AUTHORIZED`, then `200` `CAPTURED` at `18:45:33.941048Z`. Asked four seconds later, history-service had all four status changes:
+
+```bash
+curl -si http://localhost:8084/payments/91b92196-5855-4a63-b85c-1d0bb708c7f7/history -H "Authorization: Bearer $TOKEN"
+```
+
+```
+HTTP/1.1 200
+```
+```json
+[
+  {"version": 0, "fromStatus": null,         "toStatus": "PENDING",    "declineCode": null, "occurredAt": "2026-10-04T18:45:33.022475Z"},
+  {"version": 1, "fromStatus": "PENDING",    "toStatus": "AUTHORIZED", "declineCode": null, "occurredAt": "2026-10-04T18:45:33.221095Z"},
+  {"version": 2, "fromStatus": "AUTHORIZED", "toStatus": "CAPTURING",  "declineCode": null, "occurredAt": "2026-10-04T18:45:33.916212Z"},
+  {"version": 3, "fromStatus": "CAPTURING",  "toStatus": "CAPTURED",   "declineCode": null, "occurredAt": "2026-10-04T18:45:33.941048Z"}
+]
+```
+
+`CAPTURING` is the claim that capture makes in the database before it calls the acquirer ([Capture and void](#capture-and-void)), so it has its own entry. Without a token the same call is `401` with `WWW-Authenticate: Bearer` and `{"error":"unauthorized","status":401,"path":"/payments/91b92196-5855-4a63-b85c-1d0bb708c7f7/history"}`. A payment with no history is:
+
+```
+HTTP/1.1 404
+```
+```json
+{"error": "not_found", "status": 404, "path": "/payments/00000000-0000-0000-0000-000000000000/history", "detail": "no history for this payment"}
+```
+
+Another tenant's payment gets the identical answer, so the response does not confirm that it exists.
+
+### 11. The events on the topic
+
+```bash
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic paycore.payment-events --from-beginning --timeout-ms 10000 \
+  --property print.key=true --property print.partition=true
+```
+
+In Git Bash, prefix it with `MSYS_NO_PATHCONV=1`, or Git Bash rewrites `/opt/kafka/...` into a Windows path.
+
+```
+Partition:2  91b92196-5855-4a63-b85c-1d0bb708c7f7  {"amount": 4250, "tenant": "acme", "eventId": "8f7cf9e0-a9f6-43e1-aa2e-d8bdac933f1e", "version": 0, "currency": "EUR", "toStatus": "PENDING", "paymentId": "91b92196-5855-4a63-b85c-1d0bb708c7f7", "fromStatus": null, "occurredAt": "2026-10-04T18:45:33.022475Z", "declineCode": null}
+Partition:2  91b92196-5855-4a63-b85c-1d0bb708c7f7  {"amount": 4250, "tenant": "acme", "eventId": "75888bd9-a065-44a4-94ce-6d266a6e9d43", "version": 1, "currency": "EUR", "toStatus": "AUTHORIZED", "paymentId": "91b92196-5855-4a63-b85c-1d0bb708c7f7", "fromStatus": "PENDING", "occurredAt": "2026-10-04T18:45:33.221095Z", "declineCode": null}
+Partition:2  91b92196-5855-4a63-b85c-1d0bb708c7f7  {"amount": 4250, "tenant": "acme", "eventId": "2b83eb30-8a94-4633-903b-6f4f5da122b2", "version": 2, "currency": "EUR", "toStatus": "CAPTURING", "paymentId": "91b92196-5855-4a63-b85c-1d0bb708c7f7", "fromStatus": "AUTHORIZED", "occurredAt": "2026-10-04T18:45:33.916212Z", "declineCode": null}
+Partition:2  91b92196-5855-4a63-b85c-1d0bb708c7f7  {"amount": 4250, "tenant": "acme", "eventId": "fa430e66-e061-406d-8a6e-cf4c9d73a8f5", "version": 3, "currency": "EUR", "toStatus": "CAPTURED", "paymentId": "91b92196-5855-4a63-b85c-1d0bb708c7f7", "fromStatus": "CAPTURING", "occurredAt": "2026-10-04T18:45:33.941048Z", "declineCode": null}
+```
+
+The key is the payment id, so all four events share a partition. The payload is the outbox row's `jsonb` column, which is why its keys are not in the contract's order; the contract fixes names and types, not order. Afterwards `kafka-consumer-groups.sh --describe --group history-service` showed partition 2 at offset 4 with lag 0, and the outbox held 4 rows, none unpublished.
+
 ---
 
 ## How idempotency works
@@ -438,6 +501,36 @@ The stale re-drive is safe because the acquirer's capture and void are idempoten
 
 ---
 
+## Events and history
+
+Every status change of a payment becomes one event, `PaymentStatusChanged`, and reaches history-service through three links. None of them is a distributed transaction. The pipeline is two local transactions joined by an at-least-once relay, and the consumer makes duplicates harmless.
+
+**The outbox write.** The event is a row in `outbox_events`, inserted by `PaymentEvents` inside the same transaction as the status change. Its propagation is `MANDATORY`, so it can never commit on its own. An event exists if and only if the change committed: a change that rolls back takes its event with it. A call that changes nothing (a replay, a repeated capture, a stale re-claim, a re-drive that again gets no answer) writes nothing. The event carries the payment's committed `@Version`, read after a flush, which is what history-service orders by. The payment path never touches Kafka, so a Kafka outage doesn't fail a payment; its events wait in the table.
+
+**The relay.** `OutboxRelay` runs every 500 ms, off the request path. It claims up to 100 unpublished rows in `seq` order, which for any one payment is its commit order, with `FOR UPDATE SKIP LOCKED`, and sends each to `paycore.payment-events`, keyed by payment id, through a producer with `acks=all` and idempotence on. A row is marked published only after the broker has acknowledged *that* row, and a pass stops at the first failure, so nothing unacknowledged is ever marked. The price is duplicates: a send that reached the broker but whose acknowledgement was lost is sent again on the next pass. Publication is **at least once**.
+
+**The consumer.** history-service reads the topic as consumer group `history-service`, one thread per partition, and commits each record's offset only after its insert. Delivery is **at least once**: after a crash or a rebalance a record comes again. The insert is `ON CONFLICT (event_id) DO NOTHING`, so a redelivered event is **one row per event** however often it arrives. Reads are ordered by `version`, not arrival, so the history is **ordered by version** even if events arrive out of order. History is **eventually consistent**: a just-created payment may briefly have no history, or only part of it.
+
+| Link | Guaranteed | Not guaranteed |
+|---|---|---|
+| Status change → outbox row | an event exists ⇔ the change committed (same transaction) | anything about Kafka |
+| Outbox → Kafka | at least once, eventually, for every committed event | exactly once; real time; per-payment order on the topic with more than one relay instance |
+| Kafka → history-service | at least once | absence of duplicates (there will be some) |
+| History rows | one row per event, whatever the number of deliveries | exactly-once delivery |
+| History order | correct per payment, by `version` | order across payments; detecting gaps |
+| Freshness | eventually consistent: the relay interval plus consumer lag | read-your-writes |
+
+**When a record can't be stored.** The consumer sorts failures into two kinds:
+
+| Failure | Handling |
+|---|---|
+| The record can never be stored: unreadable JSON, a missing id or timestamp, an unknown status, a blank tenant, a non-positive or fractional amount, a version sent as a string; or it conflicts with stored history (a different event for a version already stored, a value too long for its column) | Not retried. Published to `paycore.payment-events.DLT` on the same partition number, and the partition moves on |
+| The history database is unavailable | Retried every second, **without limit**. The event is valid, and dead-lettering it would lose history. The partition waits until the database is back |
+
+Records are read as strings and parsed by history-service's own `EventParser`, so a malformed record is one classified failure, not a deserialization loop. The parser ignores unknown fields, so payment-service can add a field before history-service knows it, and refuses numeric coercion, so `"amount": 19.99` is invalid rather than stored as `19`.
+
+---
+
 ## Testing
 
 ```bash
@@ -449,9 +542,10 @@ On the current source:
 | Module | Tests |
 |---|---|
 | acquirer-simulator | 24 |
-| payment-service | 226 |
+| payment-service | 242 |
+| history-service | 54 |
 
-Both modules report `Failures: 0, Errors: 0, Skipped: 0`. payment-service's count includes 64 parameterized cases from `PaymentStatusTest`, one for every ordered pair of the eight statuses.
+All three modules report `Failures: 0, Errors: 0, Skipped: 0`. payment-service's count includes 64 parameterized cases from `PaymentStatusTest`, one for every ordered pair of the eight statuses.
 
 The integration tests run against real PostgreSQL 16 and Redis 7 in Testcontainers. The schema is Flyway's, checked by `ddl-auto: validate`. The acquirer is `FakeAcquirer`, an in-process fake on the JDK's `HttpServer` that implements the simulator's contract and counts calls per reference. The shared test context uses a 1 s acquirer read timeout and 2 s Redis timeouts, against 2 s and 200 ms in production, so `tok_timeout` tests take a second and a cold Redis connection through Docker Desktop doesn't flake. `RedisDownTest` and `RedisPausedTest` keep the production 200 ms, because that is what they test.
 
@@ -470,6 +564,24 @@ The integration tests run against real PostgreSQL 16 and Redis 7 in Testcontaine
 | Nothing charges a card it can't answer | `PaymentContentNegotiationTest`: `Accept: text/plain` → `406`, and a `text/plain` body → `415`, each with no payment and no acquirer call |
 | A recording failure is never a bare `500` | `IdempotencyTest` on create, `PaymentTransitionTest` on capture: `502`, and the payment left where a retry re-drives it |
 | The schema is real | `PaymentPersistenceTest`: the CHECK constraints refuse a bad amount, currency and status directly in PostgreSQL |
+
+The events pipeline is tested against a real Kafka broker (`apache/kafka:4.2.0`) in Testcontainers, and history-service against its own PostgreSQL.
+
+| Promise | Proved by |
+|---|---|
+| One event per real status change, with its committed version | `OutboxWriteTest.everyStatusChangeWritesOneEventCarryingItsCommittedVersion`: create then capture → `PENDING`, `AUTHORIZED`, `CAPTURING`, `CAPTURED`, with increasing versions, the last equal to the payment's stored version. `voidThenVoidAgainWritesTheVoidEventsOnce`, `aDeclineCarriesItsDeclineCode`, `aReDriveAfterNoAnswerStartsFromUnknown` |
+| A rolled-back change leaves no event | `OutboxWriteTest.aChangeThatRollsBackLeavesNoEvent` |
+| A call that changes nothing writes nothing | `OutboxWriteTest.replaysAndRepeatedCapturesWriteNothing`, `aStaleReClaimWritesNoSecondCapturingEvent`, `anUnknownPaymentThatStaysUnknownWritesNothingMore` |
+| The idempotency guarantee is untouched | `OutboxWriteTest.twentyConcurrentIdenticalCreatesWriteTwoEvents`, with Redis forced to fail open so all 20 requests reach Postgres; every earlier test still passes |
+| Payments don't depend on Kafka | `OutboxRelayTest.paymentsKeepWorkingWhileKafkaIsDownAndTheBacklogDrainsAfter`: Kafka paused, creates still `201` within 3 s, nothing published; unpaused, the backlog drains in order |
+| At least once, never marked before the ack | `OutboxRelayTest.anUnacknowledgedSendIsSentAgainOnTheNextPass`, `aSendThatFailsImmediatelyStopsThePassAndMarksOnlyWhatWasAcknowledged`, `aPassPublishesAtMostTheBatchSize` |
+| Each payment's events reach Kafka in commit order | `OutboxRelayTest.eachPaymentsEventsReachKafkaInCommitOrder` |
+| The wire format is the contract | `EventContractTest` (payment-service) and `HistoryConsumerTest.theContractExampleIsStored` (history-service), both against `contracts/payment-status-changed.json` |
+| A duplicate delivery is one row, and not dead-lettered | `HistoryConsumerTest.aDuplicateDeliveryIsStoredOnce`, `eventsPublishedWhileTheConsumerIsStoppedAreStoredWhenItRestarts`; `HistoryStoreTest.theSameEventStoredTwiceIsOneRow` |
+| History is in version order whatever the arrival order | `HistoryConsumerTest.outOfOrderDeliveryReadsBackInVersionOrder`; `HistoryStoreTest.historyIsReadInVersionOrderWhateverTheArrivalOrder` |
+| A poison record doesn't block its partition | `HistoryConsumerTest.aPoisonRecordGoesToTheDltAndDoesNotBlockItsPartition`, `aConflictingVersionGoesToTheDltAndDoesNotBlockItsPartition`; `EventParserTest`, one case per validation rule |
+| A database outage loses nothing | `HistoryConsumerTest.aDatabaseOutageDelaysAnEventWithoutLosingIt`: history PostgreSQL paused, nothing on the DLT for 15 s, the event stored once it is back |
+| History is tenant-isolated and verified like payment-service | `HistoryApiTest.anotherTenantsPaymentIsNotFound`, `aTenantHeaderOrParameterCannotOverrideTheToken`; history-service's own `SecurityBoundaryTest`, `RealTokenTest` and `FilterErrorShapeTest` |
 
 ---
 
@@ -493,6 +605,20 @@ The integration tests run against real PostgreSQL 16 and Redis 7 in Testcontaine
 - **Access tokens typed `at+jwt` (RFC 9068) would be rejected** by Spring Security 7's default type validator. AuthCore sets no `typ` today; if it adopts RFC 9068, this service needs a validator that accepts `at+jwt`.
 - **An unknown `kid` re-fetches AuthCore's JWKS on every request.** Spring's default JWK source doesn't rate-limit refreshes, so a forged token with a made-up `kid` costs one call to AuthCore per request. ledger-service has the same default. Rate-limiting belongs with GateKeeper's edge protection (M7).
 
+From the events pipeline (M3):
+
+- **Local Kafka has replication factor 1**, so `acks=all` protects nothing on a single broker. Production needs a replication factor of at least 3 and `min.insync.replicas=2`.
+- **Published outbox rows are never deleted.** There is no retention job yet; a partial index on unpublished rows keeps the relay's scan cheap regardless.
+- **Per-payment order on the topic holds only with a single relay instance.** history-service is correct either way, because it orders by `version`.
+- **History is eventually consistent.** A just-created payment can return `404` or a partial history for up to the relay interval plus consumer lag.
+- **Gaps in a payment's history can't be detected,** because `version` is not contiguous.
+- **The relay's transaction spans a Kafka send,** bounded by `max.block.ms` plus the producer's delivery timeout, about 15 s.
+- **A history database outage blocks the affected partitions** until it recovers, by design.
+- **The DLT has no consumer or replay tooling.** Records sent there need handling by hand.
+- **Two copies of one event stored at the same moment can dead-letter the second**, for example with a consumer that keeps working after a rebalance moved its partition. History stays correct, but the DLT shows a conflict that is not one.
+- **history-service sets no JDBC socket timeout in production.** A database that hangs, rather than refusing connections, blocks the consumer thread; after `max.poll.interval.ms` the group rebalances and the partition moves to another consumer. Nothing is lost.
+- **If Kafka is unreachable when payment-service starts,** topic creation is skipped after a short timeout, and the relay's sends fail until the topic exists (created by history-service at its start, or by a payment-service restart). Outbox rows are kept and published once it does.
+
 ---
 
 ## Roadmap
@@ -502,7 +628,7 @@ The integration tests run against real PostgreSQL 16 and Redis 7 in Testcontaine
 | M0 | Multi-module skeleton, resource server verifying AuthCore JWTs | ✅ |
 | M1 | Authorize, capture, void; state machine; acquirer simulator | ✅ |
 | M2 | Idempotent creation: Postgres guarantee, Redis fast path | ✅ |
-| M3 | Transactional outbox with a polling relay → Kafka, keyed by merchant; history-service consuming through an inbox | planned |
+| M3 | Transactional outbox with a polling relay → Kafka, keyed by payment id; history-service as an idempotent consumer with a DLT and a secured read API | ✅ |
 | M4 | settlement-service: per-merchant payout batches from captured payments | planned |
 | M5 | Resilience4j around the acquirer; reconciliation of `UNKNOWN` and refused payments | planned |
 | M6 | Micrometer/Prometheus, Grafana, correlation ID across HTTP, outbox and Kafka | planned |
