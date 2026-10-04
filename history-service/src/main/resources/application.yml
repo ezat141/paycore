@@ -11,6 +11,12 @@ spring:
     url: jdbc:postgresql://localhost:5434/paycore_history
     username: paycore
     password: paycore
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: http://localhost:8080/oauth2/jwks
+          issuer-uri: http://localhost:8080
   kafka:
     bootstrap-servers: localhost:9094
     consumer:

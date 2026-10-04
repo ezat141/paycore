@@ -17,7 +17,9 @@ import org.springframework.test.web.servlet.MockMvc;
         // HikariCP does not clamp validation-timeout (5s by default) to connection-timeout. Without
         // this, a retry that borrows an aged idle connection blocks 5s in isValid() while the
         // database is paused, and each attempt takes about 6s instead of about 3s.
-        "spring.datasource.hikari.validation-timeout=500"})
+        "spring.datasource.hikari.validation-timeout=500",
+        // Tests inject tokens and never contact AuthCore; the URI only has to parse.
+        "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://localhost:9999/jwks"})
 @AutoConfigureMockMvc
 @Import({PostgresContainerConfiguration.class, KafkaContainerConfiguration.class})
 public abstract class HistoryServiceTest {
