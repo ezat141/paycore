@@ -405,6 +405,13 @@ are verified against Maven Central when planning.
 - **A database outage on history-service blocks the affected partitions** until it recovers, by
   design (§6.4).
 - **The DLT has no consumer or replay tooling.** Records sent there need manual handling.
+- **Two copies of one event stored at the same moment can dead-letter the second.** This happens,
+  for example, with a zombie consumer after a rebalance. The second insert can hit
+  `UNIQUE (payment_id, version)` before `ON CONFLICT (event_id)` sees the first. History stays
+  correct, but the DLT shows a conflict that is not one.
+- **history-service sets no JDBC socket timeout in production.** A database that hangs, rather than
+  refusing connections, blocks the consumer thread until `max.poll.interval.ms`. That triggers a
+  rebalance. Nothing is lost.
 - **If Kafka is unreachable when payment-service starts,** topic creation is skipped after a short
   timeout, and the relay's sends fail until the topic exists (created by history-service at its
   start, or by a payment-service restart). Outbox rows are kept and published once it does.
