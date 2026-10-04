@@ -1,7 +1,7 @@
 # PayCore M3 — Design
 
 **Transactional outbox, Kafka, and a payment history service**
-Date: 2026-10-03 · Status: approved in design review, awaiting spec review · Revision 1
+Date: 2026-10-03 · Status: approved; implemented (M3) · Revision 1
 
 ---
 
