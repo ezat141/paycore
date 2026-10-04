@@ -20,7 +20,8 @@ public class PaymentHistoryListener {
         this.store = store;
     }
 
-    @KafkaListener(id = ID, topics = KafkaConfig.TOPIC)
+    // idIsGroup = false: otherwise the id becomes the group id and spring.kafka.consumer.group-id is ignored
+    @KafkaListener(id = ID, idIsGroup = false, topics = KafkaConfig.TOPIC)
     public void onEvent(String payload) {
         store.insertIfAbsent(parser.parse(payload));
     }

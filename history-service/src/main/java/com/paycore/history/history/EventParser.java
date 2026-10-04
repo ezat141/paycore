@@ -3,6 +3,7 @@ package com.paycore.history.history;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.MapperFeature;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.util.Set;
@@ -19,8 +20,12 @@ public class EventParser {
     private static final Set<String> STATUSES = Set.of("PENDING", "AUTHORIZED", "DECLINED", "UNKNOWN",
             "CAPTURING", "CAPTURED", "VOIDING", "VOIDED");
 
+    // Strict numbers: Jackson would otherwise truncate 19.99 to 19 and read "1" as 1, and an
+    // event whose amount was silently changed must be rejected instead.
     private static final JsonMapper JSON = JsonMapper.builder()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .disable(DeserializationFeature.ACCEPT_FLOAT_AS_INT)
+            .disable(MapperFeature.ALLOW_COERCION_OF_SCALARS)
             .build();
 
     public PaymentStatusChanged parse(String payload) {

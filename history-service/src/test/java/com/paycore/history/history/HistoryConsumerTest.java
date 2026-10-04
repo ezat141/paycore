@@ -45,6 +45,13 @@ class HistoryConsumerTest extends HistoryServiceTest {
     @Autowired
     HistoryStore store;
 
+    /** Spec §6.2: the consumer group is history-service, not the listener id. */
+    @Test
+    void theConsumerGroupIsHistoryService() {
+        assertThat(registry.getListenerContainer(PaymentHistoryListener.ID).getGroupId())
+                .isEqualTo("history-service");
+    }
+
     @Test
     void aPublishedEventIsStored() {
         UUID payment = UUID.randomUUID();
@@ -138,8 +145,9 @@ class HistoryConsumerTest extends HistoryServiceTest {
         docker.pauseContainerCmd(postgres.getContainerId()).exec();
         try {
             send(payment, Events.json(eventId, payment, "acme", 0, null, "PENDING"));
-            // Long enough to outlast any small finite retry count: each attempt takes about 2s (the
-            // socket timeout) plus the 1s back-off, so a handler giving up after a few attempts
+            // Long enough to outlast a small finite retry count. A failed attempt takes up to about
+            // 3s: validating a borrowed connection (validation-timeout 0.5s), or a query that hits
+            // the 2s socket timeout, then the 1s back-off. A handler giving up after a few attempts
             // would have dead-lettered the event well within this window.
             assertThat(dltValues(Duration.ofSeconds(15), eventId.toString())).isEmpty();
         } finally {
@@ -156,6 +164,8 @@ class HistoryConsumerTest extends HistoryServiceTest {
         JsonMapper json = JsonMapper.builder().build();
         Map<String, Object> example = new LinkedHashMap<>(json.readValue(
                 Files.readString(Path.of("../contracts/payment-status-changed.json")), Map.class));
+        // put() would add these keys even if the contract renamed them, hiding the drift
+        assertThat(example).containsKeys("eventId", "paymentId");
         UUID payment = UUID.randomUUID();
         example.put("eventId", UUID.randomUUID().toString());
         example.put("paymentId", payment.toString());
