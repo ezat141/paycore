@@ -378,7 +378,7 @@ are verified against Maven Central when planning.
 
 ## 9. Delivery
 
-- The work is split into tasks on `feature/task-N` branches, merged with `--no-ff` into `master`,
+- The work is split into tasks on `feature/m3-task-N` branches, merged with `--no-ff` into `master`,
   with commits authored by the repository-local identity.
 - The README gains an "Events and history" section, a history-service walkthrough step, and
   every new limitation (§10).
