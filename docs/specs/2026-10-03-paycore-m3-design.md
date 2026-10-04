@@ -410,8 +410,8 @@ are verified against Maven Central when planning.
   `UNIQUE (payment_id, version)` before `ON CONFLICT (event_id)` sees the first. History stays
   correct, but the DLT shows a conflict that is not one.
 - **history-service sets no JDBC socket timeout in production.** A database that hangs, rather than
-  refusing connections, blocks the consumer thread until `max.poll.interval.ms`. That triggers a
-  rebalance. Nothing is lost.
+  refusing connections, blocks the consumer thread. After `max.poll.interval.ms` the group
+  rebalances and the partition moves to another consumer. Nothing is lost.
 - **If Kafka is unreachable when payment-service starts,** topic creation is skipped after a short
   timeout, and the relay's sends fail until the topic exists (created by history-service at its
   start, or by a payment-service restart). Outbox rows are kept and published once it does.
