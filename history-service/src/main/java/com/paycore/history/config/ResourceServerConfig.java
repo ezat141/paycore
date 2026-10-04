@@ -14,15 +14,13 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.security.web.SecurityFilterChain;
 
 /**
- * payment-service verifies AuthCore's JWTs itself and never authorizes on GateKeeper's
- * {@code X-GK-*} headers: calling :8083 directly is exactly as secure as calling it through
+ * history-service verifies AuthCore's JWTs itself and never authorizes on GateKeeper's
+ * {@code X-GK-*} headers: calling :8084 directly is exactly as secure as calling it through
  * the gateway.
  *
- * <p>All authorization is here, not in {@code @PreAuthorize}. Spring MVC resolves and
- * validates a {@code @Valid @RequestBody} before a method-security interceptor runs, so with
- * annotations an unauthorized caller could get a 400 and learn the validation rules. Here,
- * every check completes before the body is read. Deny by default: a path with no rule is
- * refused even with a full token.
+ * <p>All authorization is here, not in {@code @PreAuthorize}, so every check completes in the
+ * filter chain before any handler runs. Deny by default: a path with no rule is refused even
+ * with a full token.
  */
 @Configuration
 @EnableWebSecurity

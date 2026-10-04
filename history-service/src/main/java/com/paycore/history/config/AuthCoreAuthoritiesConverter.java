@@ -13,7 +13,8 @@ import java.util.Set;
 /**
  * Turns AuthCore's three authorization claims into authorities: {@code SCOPE_x} for what the
  * client application was granted, {@code ROLE_x} and bare permissions for what the user may do.
- * Copied from ledger-service rather than shared — the services share a wire contract, not code.
+ * Copied from payment-service (which copied it from ledger-service) rather than shared — the
+ * services share a wire contract, not code.
  */
 public class AuthCoreAuthoritiesConverter implements Converter<Jwt, Collection<GrantedAuthority>> {
 

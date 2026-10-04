@@ -13,11 +13,12 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
- * Spec §3.1–3.2, in order: the client's scope <em>and</em> the user's permission, then a tenant.
+ * M0–M2 spec §3.1–3.2 and M3 spec §6.5, in order: the client's scope <em>and</em> the user's
+ * permission, then a tenant.
  *
  * <p>Both authorities are required because they answer different questions. A user holding
- * {@code payments:write} who signs in through a client granted only {@code payments:read}
- * must not write: the scope is the client's ceiling, the permission is the user's right.
+ * {@code payments:read} who signs in through a client granted no {@code payments:read} scope
+ * must not read: the scope is the client's ceiling, the permission is the user's right.
  *
  * <p>The tenant check comes second so a token lacking everything is told about permissions
  * first. That includes every client-credentials token today: AuthCore adds {@code tenant},
