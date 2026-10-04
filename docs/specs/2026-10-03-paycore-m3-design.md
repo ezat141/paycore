@@ -315,8 +315,8 @@ deserializer. A malformed or invalid record therefore becomes one non-retryable
   `payments:read` permission, then a non-blank String `tenant` claim. All of this is checked in
   the filter chain before any handler runs. Errors use the platform JSON shape, including an
   `/error` controller.
-- **Fields:** exactly `version`, `fromStatus`, `toStatus`, `declineCode` (null unless the payment was
-  declined) and `occurredAt`. Amount, currency and tenant are not returned.
+- **Fields:** exactly `version`, `fromStatus`, `toStatus`, `declineCode` (null except on the entry
+  that records the decline) and `occurredAt`. Amount, currency and tenant are not returned.
 - **Tenant isolation:** rows are filtered by the caller's tenant. Another tenant's payment, or a
   payment with no history yet, returns `404`, which does not confirm the payment exists.
 - **Eventually consistent:** a just-created payment can briefly return `404` or a history that
